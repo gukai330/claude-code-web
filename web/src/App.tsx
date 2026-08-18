@@ -1130,6 +1130,7 @@ export function App() {
               secondsSinceLastEvent={secondsSinceLastEvent}
               onBranch={(uuid: string) => void branchFrom(uuid)}
               onStartSuggestion={startSuggestion}
+              claudeSessionId={state.state?.claudeSessionId ?? state.state?.providerSessionId}
               activeTool={state.state?.activeTool}
               onAcceptEdit={onAcceptEdit}
               onRejectEdit={onRejectEdit}

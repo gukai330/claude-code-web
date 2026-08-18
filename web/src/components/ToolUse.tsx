@@ -2,8 +2,16 @@ import { useState } from 'react';
 import type { ChatItem } from '../types';
 import { Icon, type IconName } from './Icon';
 import { CodeBlock } from './CodeBlock';
+import { SubagentTranscript } from './SubagentTranscript';
 
-type Props = { item: Extract<ChatItem, { kind: 'tool_use' }>; defaultOpen?: boolean };
+type Props = {
+  item: Extract<ChatItem, { kind: 'tool_use' }>;
+  defaultOpen?: boolean;
+  /** Only needed to read a Task's subagent transcript. */
+  token?: string;
+  cwd?: string;
+  claudeSessionId?: string;
+};
 
 const TOOL_ICON: Record<string, IconName> = {
   Bash: 'terminal',
@@ -25,7 +33,7 @@ function primaryArg(name: string, input: Record<string, unknown>): string {
   return first ? `${first[0]}=${JSON.stringify(first[1]).slice(0, 80)}` : '';
 }
 
-export function ToolUse({ item, defaultOpen = false }: Props) {
+export function ToolUse({ item, defaultOpen = false, token, cwd, claudeSessionId }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   const hasResult = !!item.result;
   const isError = item.result?.isError;
@@ -71,6 +79,10 @@ export function ToolUse({ item, defaultOpen = false }: Props) {
             </div>
           )}
           {!hasResult && <div className="text-xs text-text-muted px-3.5 py-2.5">running…</div>}
+          {/* What the summary above does not show: the subagent's own work. */}
+          {item.name === 'Task' && open && token && cwd && (
+            <SubagentTranscript token={token} cwd={cwd} claudeSessionId={claudeSessionId} />
+          )}
         </div>
       </div>
     </div>

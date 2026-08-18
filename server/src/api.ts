@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fastifyMultipart, { type MultipartFile } from '@fastify/multipart';
-import { forkSession, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { forkSession, getSubagentMessages, listSessions, listSubagents, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readdir, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
@@ -144,6 +144,38 @@ export function registerApi(
         node: process.version,
       },
     };
+  });
+
+  // A Task tool result is a summary of work the transcript does not otherwise
+  // show. These two expose the subagent's own conversation so it can be read
+  // instead of guessed at.
+  app.get('/api/subagents', async (req, reply) => {
+    const q = req.query as { cwd?: string; sessionId?: string } | undefined;
+    if (!q?.sessionId) return reply.code(400).send({ error: 'sessionId required' });
+    try {
+      const ids = await listSubagents(q.sessionId, q.cwd ? { dir: resolveSafe(q.cwd) } : undefined);
+      return { subagents: ids };
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+  });
+
+  app.get('/api/subagent', async (req, reply) => {
+    const q = req.query as { cwd?: string; sessionId?: string; agentId?: string; limit?: string } | undefined;
+    if (!q?.sessionId || !q?.agentId) {
+      return reply.code(400).send({ error: 'sessionId and agentId required' });
+    }
+    try {
+      const messages = await getSubagentMessages(q.sessionId, q.agentId, {
+        ...(q.cwd ? { dir: resolveSafe(q.cwd) } : {}),
+        // Bounded by default: a long-running subagent can produce a great deal
+        // more than anyone wants dropped into the transcript at once.
+        limit: Math.min(Math.max(Number(q.limit) || 200, 1), 1000),
+      });
+      return { messages };
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
   });
 
   app.get('/api/live-sessions', async () => ({ sessions: sm.listSnapshots() }));
