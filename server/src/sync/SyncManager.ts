@@ -20,7 +20,11 @@ export type { SyncItem, SyncOutcome, SyncPreference, SyncResult };
 export const SYNC_CONFIG_FILE = join(CONFIG_DIR, 'sync.json');
 
 const DEFAULT_UNISON_COMMAND = ['unison'];
-const DEFAULT_TIMEOUT_MS = 120_000;
+/** A first sync walks and hashes the whole tree on both sides. Two minutes was
+ *  enough for a toy directory and nowhere near enough for a real project —
+ *  3.4 GB over a 9p mount took longer than that just to scan. The timeout is
+ *  here to stop a wedged process, not to bound honest work. */
+const DEFAULT_TIMEOUT_MS = 30 * 60 * 1000;
 const KILL_GRACE_MS = 5_000;
 const VERSION_PROBE_TIMEOUT_MS = 10_000;
 /** How long a failed probe is trusted. Short, so installing unison takes
@@ -80,6 +84,9 @@ export type UnisonInfo = {
 export type SyncStatus = {
   cwd: string;
   configFile: string;
+  /** unison's own log. The only place to see what a long run is doing, since
+   *  its progress output never reaches the browser. */
+  logFile: string;
   configured: boolean;
   enabled: boolean;
   config?: SyncProjectConfig;
@@ -128,6 +135,9 @@ export type ConflictSide = 'server' | 'client';
 
 type LoadedConfig = {
   client?: SyncClientConfig;
+  /** Which unison to run. Both ends must be the same build — the version
+   *  handshake is coarser than the marshalling format actually is. */
+  unisonPath?: string;
   projects: Map<string, SyncProjectConfig>;
   /** Per-project validation failures, keyed the same way as `projects`. */
   errors: Map<string, string>;
@@ -148,7 +158,8 @@ export type ProjectPatch = {
 export class SyncManager {
   private readonly configFile: string;
   private readonly stateDir: string;
-  private readonly unisonCommand: string[];
+  /** Set only by an env var or by a test; otherwise the config decides. */
+  private readonly explicitCommand: string[] | undefined;
   private unisonInfo: UnisonInfo | undefined;
   private unisonProbedAt = 0;
   /** host → which shell answers there. Probing costs an ssh round trip. */
@@ -165,9 +176,9 @@ export class SyncManager {
   constructor(opts: SyncManagerOptions = {}) {
     this.configFile = opts.configFile ?? SYNC_CONFIG_FILE;
     this.stateDir = opts.stateDir ?? join(CONFIG_DIR, 'unison');
-    this.unisonCommand =
+    this.explicitCommand =
       opts.unisonCommand ??
-      (process.env.CLAUDECODE_WEB_UNISON ? [process.env.CLAUDECODE_WEB_UNISON] : DEFAULT_UNISON_COMMAND);
+      (process.env.CLAUDECODE_WEB_UNISON ? [process.env.CLAUDECODE_WEB_UNISON] : undefined);
   }
 
   async loadConfig(): Promise<LoadedConfig> {
@@ -200,6 +211,9 @@ export class SyncManager {
     const nested = root.projects && typeof root.projects === 'object' && !Array.isArray(root.projects);
     const entries = nested ? (root.projects as Record<string, unknown>) : root;
 
+    const unisonPath =
+      typeof root.unisonPath === 'string' && root.unisonPath.trim() ? root.unisonPath.trim() : undefined;
+
     let client: SyncClientConfig | undefined;
     if (root.client !== undefined && root.client !== null) {
       const parsedClient = parseClientConfig(root.client);
@@ -217,7 +231,7 @@ export class SyncManager {
       if (project.ok) projects.set(resolve(key), project.config);
       else errors.set(resolve(key), project.error);
     }
-    return { client, projects, errors };
+    return { client, unisonPath, projects, errors };
   }
 
   async status(cwd: string): Promise<SyncStatus> {
@@ -234,6 +248,7 @@ export class SyncManager {
     return {
       cwd: root,
       configFile: this.configFile,
+      logFile: join(this.stateDir, 'unison.log'),
       configured: config !== undefined || errors.has(root),
       enabled: config?.enabled ?? false,
       config,
@@ -246,14 +261,24 @@ export class SyncManager {
     };
   }
 
+  /** The configured binary wins over PATH, because the one on PATH is usually
+   *  the distribution's and the far side rarely matches it. */
+  private async resolveUnisonCommand(): Promise<string[]> {
+    if (this.explicitCommand) return this.explicitCommand;
+    const { unisonPath } = await this.loadConfig();
+    return unisonPath ? [unisonPath] : DEFAULT_UNISON_COMMAND;
+  }
+
   /** A hit is cached forever, a miss for `UNISON_MISS_TTL_MS`, so installing
    *  unison takes effect without restarting the server. */
   async detectUnison(refresh = false): Promise<UnisonInfo> {
-    if (!refresh && this.unisonInfo) {
+    const command = await this.resolveUnisonCommand();
+    const changed = this.unisonInfo && this.unisonInfo.command.join(' ') !== command.join(' ');
+    if (!refresh && !changed && this.unisonInfo) {
       if (this.unisonInfo.available) return this.unisonInfo;
       if (Date.now() - this.unisonProbedAt < UNISON_MISS_TTL_MS) return this.unisonInfo;
     }
-    const info = await probeUnison(this.unisonCommand);
+    const info = await probeUnison(command);
     this.unisonInfo = info;
     this.unisonProbedAt = Date.now();
     return info;
@@ -507,10 +532,10 @@ export class SyncManager {
    *  in the nested shape, and drops `//` comments — the file is hand-editable,
    *  but not hand-editable *and* machine-written without losing something. */
   private mutate<T extends { ok: boolean }>(
-    fn: (doc: { client?: Record<string, unknown>; projects: Record<string, unknown> }) => T
+    fn: (doc: { unisonPath?: string; client?: Record<string, unknown>; projects: Record<string, unknown> }) => T
   ): Promise<T> {
     const run = this.writeChain.then(async () => {
-      let doc: { client?: Record<string, unknown>; projects: Record<string, unknown> } = { projects: {} };
+      let doc: { unisonPath?: string; client?: Record<string, unknown>; projects: Record<string, unknown> } = { projects: {} };
       try {
         const raw = await readFile(this.configFile, 'utf8');
         const parsed = JSON.parse(stripLineComments(raw)) as Record<string, unknown>;
@@ -520,6 +545,7 @@ export class SyncManager {
             ? { ...(parsed.projects as Record<string, unknown>) }
             : Object.fromEntries(Object.entries(parsed).filter(([k]) => k !== 'client' && k !== 'projects'));
           doc = {
+            unisonPath: typeof parsed.unisonPath === 'string' ? parsed.unisonPath : undefined,
             client: parsed.client as Record<string, unknown> | undefined,
             projects: entries,
           };
@@ -532,6 +558,7 @@ export class SyncManager {
       if (!result.ok) return result;
 
       const out: Record<string, unknown> = {};
+      if (doc.unisonPath) out.unisonPath = doc.unisonPath;
       if (doc.client) out.client = doc.client;
       out.projects = doc.projects;
       ensureConfigDir();
@@ -565,11 +592,12 @@ export class SyncManager {
     this.running.add(root);
     try {
       mkdirSync(this.stateDir, { recursive: true, mode: 0o700 });
+      const command = await this.resolveUnisonCommand();
       const args = [
-        ...this.unisonCommand.slice(1),
+        ...command.slice(1),
         ...buildUnisonArgs(root, plan, prefer, this.stateDir, paths),
       ];
-      const exec = await runProcess(this.unisonCommand[0], args, {
+      const exec = await runProcess(command[0], args, {
         // UNISON is where unison keeps its archives; without it they land in
         // ~/.unison and mix with anything the operator runs by hand.
         env: { ...process.env, UNISON: this.stateDir },
@@ -619,9 +647,12 @@ export function resolveProject(
   }
   const path = normaliseClientPath(config.localPath);
   const userAt = client.user ? `${client.user}@` : '';
-  // unison reads `//` after the host as "absolute path". A Windows path has no
-  // leading slash of its own, so one is added: C:/proj -> ssh://host//C:/proj
-  const remote = `ssh://${userAt}${client.host}/${path.startsWith('/') ? path : `/${path}`}`;
+  // Everything after the host is handed to the far side as its path. A POSIX
+  // path needs its leading slash back, hence the doubled one: /home/me ->
+  // ssh://host//home/me. A drive letter is already absolute, and prefixing it
+  // produces /E:/… which Windows cannot chdir to — the far side reports
+  // "unable to cd either to it".
+  const remote = `ssh://${userAt}${client.host}/${remotePathFor(path)}`;
   const sshargs = [
     ...(config.sshargs.length > 0
       ? config.sshargs
@@ -642,14 +673,26 @@ export function resolveProject(
   };
 }
 
+/** The path as the far side must receive it. Exported because getting this
+ *  wrong is invisible until unison fails on the remote. */
+export function remotePathFor(path: string): string {
+  if (/^[A-Za-z]:/.test(path)) return path;
+  return path.startsWith('/') ? path : `/${path}`;
+}
+
 /** Read a unison root string back into its parts. Only needed for an entry
  *  that set `remote` by hand; a composed one already knows them. */
 export function parseClientRoot(remote: string): ClientRoot {
   const match = /^ssh:\/\/(?:([^@/]+)@)?([^:/]+)(?::(\d+))?(\/.*)$/.exec(remote.trim());
   if (!match) return { kind: 'local', path: remote.trim() };
   const [, user, host, port, rawPath] = match;
-  // unison's `//path` means absolute; drop the leading slash it added.
-  const path = rawPath.startsWith('//') ? rawPath.slice(1) : rawPath;
+  // Mirror of remotePathFor: `//path` gave back an absolute POSIX path, and a
+  // drive letter never carried a leading slash to begin with.
+  const path = /^\/[A-Za-z]:/.test(rawPath)
+    ? rawPath.slice(1)
+    : rawPath.startsWith('//')
+      ? rawPath.slice(1)
+      : rawPath;
   return { kind: 'ssh', host, ...(user ? { user } : {}), ...(port ? { port: Number(port) } : {}), path };
 }
 
@@ -741,7 +784,12 @@ function classify(exec: ExecResult, parsed: ParsedOutput): SyncOutcome {
 }
 
 function describe(outcome: SyncOutcome, exec: ExecResult, parsed: ParsedOutput): string {
-  if (exec.timedOut) return 'unison timed out and was killed';
+  if (exec.timedOut) {
+    return (
+      'Sync timed out and was stopped. A first sync of a large tree can take a while — ' +
+      'raise "timeoutMs" for this project in sync.json, or narrow it with ignore rules.'
+    );
+  }
   switch (outcome) {
     case 'ok':
       return parsed.transferred > 0
@@ -1137,7 +1185,21 @@ function runProcess(
       // stdin closed: batch mode should never prompt, and if it does we want
       // EOF rather than a process parked forever on a read.
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Own process group. unison spawns ssh, and signalling only unison
+      // leaves that ssh running against the far side forever — one orphan per
+      // timeout, each holding a connection.
+      detached: process.platform !== 'win32',
     });
+
+    const signalTree = (signal: NodeJS.Signals) => {
+      try {
+        if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal);
+        else child.kill(signal);
+      } catch {
+        // Already gone, or never grouped; the direct kill is the fallback.
+        try { child.kill(signal); } catch { /* nothing left to signal */ }
+      }
+    };
 
     let output = '';
     let timedOut = false;
@@ -1152,8 +1214,8 @@ function runProcess(
 
     const killTimer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGTERM');
-      hardKillTimer = setTimeout(() => child.kill('SIGKILL'), KILL_GRACE_MS);
+      signalTree('SIGTERM');
+      hardKillTimer = setTimeout(() => signalTree('SIGKILL'), KILL_GRACE_MS);
       hardKillTimer.unref?.();
     }, opts.timeoutMs);
     killTimer.unref?.();

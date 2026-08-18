@@ -46,7 +46,7 @@ test('a path already using forward slashes is left alone', () => {
 });
 
 test('each of those composes into a working unison root', () => {
-  const expected = 'ssh://LIJIAQI@localhost//C:/Users/aria/projects/foo';
+  const expected = 'ssh://LIJIAQI@localhost/C:/Users/aria/projects/foo';
   for (const input of [
     'C:\\Users\\aria\\projects\\foo',
     '"C:\\Users\\aria\\projects\\foo"',

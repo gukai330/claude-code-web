@@ -93,7 +93,7 @@ test('a Windows path keeps its drive letter and loses its backslashes', () => {
   if (!resolved.ok) return;
   // Two slashes after the host is unison's "absolute path"; a URI cannot
   // carry backslashes at all.
-  assert.equal(resolved.value.remote, 'ssh://gukai@localhost//C:/Users/Gukai/proj');
+  assert.equal(resolved.value.remote, 'ssh://gukai@localhost/C:/Users/Gukai/proj');
   // A non-default port becomes an ssh argument, not part of the URI: not
   // every unison version parses a port inside ssh://.
   assert.equal(resolved.value.sshargs[resolved.value.sshargs.indexOf('-p') + 1], '2222');
@@ -129,7 +129,7 @@ test('status surfaces the composed remote and the unresolvable case', async () =
       projects: { [f.project]: { localPath: 'C:/proj/foo' } },
     });
     const withClient = await f.manager().status(f.project);
-    assert.equal(withClient.remote, 'ssh://gukai@localhost//C:/proj/foo');
+    assert.equal(withClient.remote, 'ssh://gukai@localhost/C:/proj/foo');
     assert.equal(withClient.configError, undefined);
 
     f.writeConfig({ projects: { [f.project]: { localPath: 'C:/proj/foo' } } });
