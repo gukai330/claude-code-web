@@ -25,6 +25,39 @@ Token: `~/.claudecode-web/token` (also echoed in the startup banner).
 tunnel maps a different local port, the port in that URL is wrong — keep the
 token, fix the port.
 
+## Working on this repo
+
+**The code is not on the machine you are running on.** It lives at
+`~/claudecode` on **GK-SERVER**, and everything — editing, building, testing,
+running — happens there. Reach it from the Windows client through WSL:
+
+```bash
+wsl -d Ubuntu-ext -- ssh srv '<command>'
+```
+
+Four transport gotchas, each of which costs an hour if you meet it cold:
+
+- **Shell variables do not survive an inline command.** `ssh srv 'X=1; echo $X'`
+  prints nothing — `$X`, `$(...)` and `${PIPESTATUS[0]}` all come back empty.
+  Anything needing variables goes in a script file, piped in:
+  `wsl -d Ubuntu-ext -- bash -c "ssh srv 'cat > /tmp/x.sh' < local.sh"`, then run it.
+  The same applies to multi-line Python: write it locally, pipe to `python3 -`.
+- **Git Bash rewrites paths that look POSIX.** `/tmp/foo` silently becomes
+  `C:/Users/.../tmp/foo` before the command ever leaves. Export
+  `MSYS_NO_PATHCONV=1` first. Note the Bash tool cannot read `/mnt/c/...`
+  paths (that is WSL's namespace) — write scratch files with the Write tool.
+- **`pkill -f "some pattern"` matches your own ssh session**, because the
+  pattern is in that session's command line. It kills your shell and returns
+  255. Break the self-match: `pkill -f "some[ ]pattern"`.
+- **Heredocs to the remote are unreliable** through the wsl→ssh hop. Transfer a
+  file and execute it.
+
+Build and test both run server-side, from `~/claudecode`:
+`npm test`, `npm run build`, `npx tsc -p server/tsconfig.json --noEmit`.
+
+A rebuilt `web/dist` is picked up by a running server without a restart —
+fastify serves it per request. Server code changes do need a restart.
+
 ## How it actually works (verified by reading the source, not the README)
 
 - **Invocation is the official Agent SDK**, not a pty and not terminal

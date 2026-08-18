@@ -71,6 +71,9 @@ export type SyncProjectConfig = {
   syncOnIdle: boolean;
   /** Extra ssh arguments. Composed from the client port when absent. */
   sshargs: string[];
+  /** Propagate permission bits. Defaults to false against a Windows root,
+   *  where they produce a conflict per file and mean nothing. */
+  syncPermissions?: boolean;
   timeoutMs: number;
 };
 
@@ -120,6 +123,9 @@ export type ResolvedProject = {
   /** The same client root, structured — needed to read one file back out of
    *  it, which the composed unison URI cannot do. */
   clientRoot: ClientRoot;
+  /** Whether permission bits are worth propagating. False against a Windows
+   *  root, where they cannot survive the round trip. */
+  syncPermissions: boolean;
 };
 
 /** Where the client copy actually lives. `local` covers two paths on the
@@ -626,13 +632,15 @@ export function resolveProject(
 ): { ok: true; value: ResolvedProject } | { ok: false; error: string } {
   const base = { config, ignore: config.ignore };
   if (config.remote) {
+    const clientRoot = parseClientRoot(config.remote);
     return {
       ok: true,
       value: {
         ...base,
         remote: config.remote,
         sshargs: config.sshargs,
-        clientRoot: parseClientRoot(config.remote),
+        clientRoot,
+        syncPermissions: config.syncPermissions ?? !isWindowsRoot(clientRoot.path),
       },
     };
   }
@@ -669,8 +677,14 @@ export function resolveProject(
       remote,
       sshargs,
       clientRoot: { kind: 'ssh', host: client.host, user: client.user, port: client.port, path },
+      syncPermissions: config.syncPermissions ?? !isWindowsRoot(path),
     },
   };
+}
+
+/** A drive letter or a UNC share means the far side is Windows. */
+function isWindowsRoot(path: string): boolean {
+  return /^([A-Za-z]:|\/\/[^/])/.test(path);
 }
 
 /** The path as the far side must receive it. Exported because getting this
@@ -699,7 +713,7 @@ export function parseClientRoot(remote: string): ClientRoot {
 /** Exported for tests: the argument vector is the whole contract with unison. */
 export function buildUnisonArgs(
   root: string,
-  plan: { remote: string; ignore: string[]; sshargs: string[] },
+  plan: { remote: string; ignore: string[]; sshargs: string[]; syncPermissions?: boolean },
   prefer: SyncPreference,
   stateDir: string,
   /** Restrict the run to these paths, relative to the root. Used to resolve
@@ -717,6 +731,11 @@ export function buildUnisonArgs(
     '-logfile',
     join(stateDir, 'unison.log'),
   ];
+  // Unix permission bits have no counterpart on Windows, so every file comes
+  // back as "properties changed on both sides" — 37 of 38 conflicts on the
+  // first real run were exactly this. Syncing them is meaningless there; a
+  // POSIX pair keeps them, where an executable bit is real information.
+  if (plan.syncPermissions === false) args.push('-perms', '0');
   for (const spec of plan.ignore) args.push('-ignore', spec);
   for (const path of paths) args.push('-path', path);
   if (plan.sshargs.length > 0) args.push('-sshargs', plan.sshargs.join(' '));
@@ -777,9 +796,13 @@ function classify(exec: ExecResult, parsed: ParsedOutput): SyncOutcome {
   // Started and not finished: the file is in neither state and the trees do
   // not agree, so this is not a conflict to hand to the user, it is a failure.
   if (parsed.partiallyTransferred > 0 || parsed.partial.length > 0) return 'error';
-  // Still honour a nonzero code where a build does report one.
+  // The counts outrank the exit code. A run that finished, failed nothing and
+  // left nothing half-copied is at worst a set of conflicts — reporting it as
+  // an error because unison exited 2 turns "38 files need your attention" into
+  // a red 500 that says nothing.
+  if (parsed.skipped > 0 || parsed.conflicts.length > 0) return 'conflicts';
   if (exec.code !== null && exec.code > 1) return 'error';
-  if (parsed.skipped > 0 || parsed.conflicts.length > 0 || exec.code === 1) return 'conflicts';
+  if (exec.code === 1) return 'conflicts';
   return 'ok';
 }
 
@@ -1119,6 +1142,14 @@ function parseProjectConfig(
     if (parsedValue === undefined) return { ok: false, error: `"${key}" must be a boolean` };
   }
 
+  let syncPermissions: boolean | undefined;
+  if (v.syncPermissions !== undefined) {
+    if (typeof v.syncPermissions !== 'boolean') {
+      return { ok: false, error: '"syncPermissions" must be a boolean' };
+    }
+    syncPermissions = v.syncPermissions;
+  }
+
   let timeoutMs = DEFAULT_TIMEOUT_MS;
   if (v.timeoutMs !== undefined) {
     if (typeof v.timeoutMs !== 'number' || !Number.isFinite(v.timeoutMs) || v.timeoutMs <= 0) {
@@ -1137,6 +1168,7 @@ function parseProjectConfig(
       syncOnSend: syncOnSend as boolean,
       syncOnIdle: syncOnIdle as boolean,
       sshargs,
+      ...(syncPermissions !== undefined ? { syncPermissions } : {}),
       timeoutMs,
     },
   };
