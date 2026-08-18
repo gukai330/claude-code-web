@@ -19,7 +19,20 @@ type Form = {
   syncOnIdle: boolean;
 };
 
-const EMPTY: Form = { user: '', host: '', port: '', localPath: '', syncOnSend: true, syncOnIdle: true };
+/** The connect command in the README opens `-R 2222:127.0.0.1:22`, so from the
+ *  server this machine is reachable at localhost:2222. Defaulting to it means
+ *  the common setup needs no address typed at all. */
+const DEFAULT_TUNNEL_HOST = 'localhost';
+const DEFAULT_TUNNEL_PORT = '2222';
+
+const EMPTY: Form = {
+  user: '',
+  host: DEFAULT_TUNNEL_HOST,
+  port: DEFAULT_TUNNEL_PORT,
+  localPath: '',
+  syncOnSend: true,
+  syncOnIdle: true,
+};
 
 /**
  * Sets up two-way sync between a server folder and a folder on the machine
@@ -53,8 +66,11 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
       setStatus(j);
       setForm({
         user: j.client?.user ?? '',
-        host: j.client?.host ?? '',
-        port: j.client?.port ? String(j.client.port) : '',
+        // Nothing configured yet: assume the reverse tunnel, because the
+        // connect command carries `-R 2222:127.0.0.1:22` and that makes the
+        // server's own localhost:2222 the way back to this machine.
+        host: j.client?.host ?? DEFAULT_TUNNEL_HOST,
+        port: j.client?.port ? String(j.client.port) : j.client ? '' : DEFAULT_TUNNEL_PORT,
         localPath: j.config?.localPath ?? '',
         syncOnSend: j.config?.syncOnSend ?? true,
         syncOnIdle: j.config?.syncOnIdle ?? true,
@@ -247,13 +263,15 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
             <>
               <div className="mt-3 grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_84px] gap-2">
                 <Field label="Address of your computer" value={form.host} placeholder="192.168.0.30, or an ssh alias" onChange={(host) => setForm((f) => ({ ...f, host }))} />
-                <Field label="User (optional)" value={form.user} placeholder="same as here" onChange={(user) => setForm((f) => ({ ...f, user }))} />
+                <Field label="User on that machine" value={form.user} placeholder="your account there" onChange={(user) => setForm((f) => ({ ...f, user }))} />
                 <Field label="Port (opt.)" value={form.port} placeholder="22" onChange={(port) => setForm((f) => ({ ...f, port }))} />
               </div>
               <div className="mt-1 text-[10px] text-text-muted">
-                Only the address is required — blank user and port mean ssh's own defaults. An
-                alias from the server's <code className="font-mono">~/.ssh/config</code> works here
-                and brings its user, port and key with it. Shared by every synced project.
+                Defaults assume you connect with <code className="font-mono">-R 2222:127.0.0.1:22</code>,
+                which makes this machine reachable from the server at localhost:2222. On a LAN you can
+                use its address directly, or an alias from the server's{' '}
+                <code className="font-mono">~/.ssh/config</code>. Leave the user blank only if your
+                account here has the same name as on the server. Shared by every synced project.
               </div>
             </>
           )}
