@@ -11,6 +11,8 @@ type Props = {
   token?: string;
   cwd?: string;
   claudeSessionId?: string;
+  /** Push this tool's work into the background so the turn continues. */
+  onBackground?: (toolUseId: string) => void;
 };
 
 const TOOL_ICON: Record<string, IconName> = {
@@ -33,7 +35,7 @@ function primaryArg(name: string, input: Record<string, unknown>): string {
   return first ? `${first[0]}=${JSON.stringify(first[1]).slice(0, 80)}` : '';
 }
 
-export function ToolUse({ item, defaultOpen = false, token, cwd, claudeSessionId }: Props) {
+export function ToolUse({ item, defaultOpen = false, token, cwd, claudeSessionId, onBackground }: Props) {
   const [open, setOpen] = useState(defaultOpen);
   const hasResult = !!item.result;
   const isError = item.result?.isError;
@@ -78,7 +80,21 @@ export function ToolUse({ item, defaultOpen = false, token, cwd, claudeSessionId
               />
             </div>
           )}
-          {!hasResult && <div className="text-xs text-text-muted px-3.5 py-2.5">running…</div>}
+          {!hasResult && (
+            <div className="flex items-center gap-2 px-3.5 py-2.5 text-xs text-text-muted">
+              <span>running…</span>
+              {onBackground && (
+                <button
+                  type="button"
+                  onClick={() => onBackground(item.toolUseId)}
+                  title="Let this keep running and carry on with the turn"
+                  className="rounded-sm px-2 py-0.5 text-[11px] text-text-secondary hover:bg-bg-hover hover:text-text-primary transition-colors duration-hover"
+                >
+                  Run in background
+                </button>
+              )}
+            </div>
+          )}
           {/* What the summary above does not show: the subagent's own work. */}
           {item.name === 'Task' && open && token && cwd && (
             <SubagentTranscript token={token} cwd={cwd} claudeSessionId={claudeSessionId} />

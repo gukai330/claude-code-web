@@ -93,6 +93,9 @@ export type ClientPlanResponse = ClientAttachmentScope & {
   decision: 'approve' | 'reject';
 };
 export type ClientInterrupt = ClientAttachmentScope & { type: 'interrupt' };
+/** Push blocking work into the background and let the turn continue. Without a
+ *  toolUseId this backgrounds everything in flight. */
+export type ClientBackgroundTask = ClientAttachmentScope & { type: 'background_task'; toolUseId?: string };
 export type ClientSetModel = ClientAttachmentScope & { type: 'set_model'; model: string };
 export type ClientSetMode = ClientAttachmentScope & { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = ClientAttachmentScope & { type: 'refresh_history' };
@@ -110,6 +113,7 @@ export type ClientMessage =
   | ClientPermissionResponse
   | ClientPlanResponse
   | ClientInterrupt
+  | ClientBackgroundTask
   | ClientSetModel
   | ClientSetMode
   | ClientRefreshHistory

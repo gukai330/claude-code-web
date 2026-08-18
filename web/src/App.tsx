@@ -1078,6 +1078,7 @@ export function App() {
         </div>
         <main className="flex-1 flex flex-col min-w-0 relative">
         <TopBar
+          token={token ?? ''}
           state={state.state}
           cwd={currentCwd}
           home={serverInfo?.home}
@@ -1131,6 +1132,11 @@ export function App() {
               onBranch={(uuid: string) => void branchFrom(uuid)}
               onStartSuggestion={startSuggestion}
               claudeSessionId={state.state?.claudeSessionId ?? state.state?.providerSessionId}
+              onBackground={(toolUseId: string) => {
+                if (!wsRef.current?.send({ type: 'background_task', toolUseId })) {
+                  pushToast('Not sent. Reconnect and try again.', { level: 'error' });
+                }
+              }}
               activeTool={state.state?.activeTool}
               onAcceptEdit={onAcceptEdit}
               onRejectEdit={onRejectEdit}

@@ -4,6 +4,7 @@ import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
 import { ContextMeter } from './ContextMeter';
+import { McpStatusChip } from './McpStatusChip';
 import { abbreviateHome } from '../pathDisplay';
 
 type Props = {
@@ -28,6 +29,7 @@ type Props = {
   onRefreshHistory?: () => void;
   sessionTitle?: string;
   connected: boolean;
+  token?: string;
 };
 
 export function TopBar(p: Props) {
@@ -85,6 +87,7 @@ export function TopBar(p: Props) {
         />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+          {s && !s.viewerMode && p.token && <McpStatusChip token={p.token} sessionId={s.sessionId} />}
           {s && !s.viewerMode && (
             <ContextMeter
               usage={s.contextUsage}

@@ -49,6 +49,13 @@ export type SlashCommandInfo = {
   aliases?: string[];
 };
 
+/** Live MCP server status, from GET /api/session/mcp. */
+export type McpServerInfo = {
+  name: string;
+  status: 'connected' | 'failed' | 'needs-auth' | 'pending' | 'disabled';
+  serverInfo?: { name: string; version: string };
+};
+
 export type ActiveToolInfo = {
   toolUseId: string;
   name: string;
@@ -142,12 +149,13 @@ export type ClientUserMessage = ClientAttachmentScope & { type: 'user'; text: st
 export type ClientPermissionResponse = ClientAttachmentScope & { type: 'permission_response'; reqId: string; decision: 'allow' | 'deny'; scope?: 'once' | 'session' };
 export type ClientPlanResponse = ClientAttachmentScope & { type: 'plan_response'; reqId: string; decision: 'approve' | 'reject' };
 export type ClientInterrupt = ClientAttachmentScope & { type: 'interrupt' };
+export type ClientBackgroundTask = ClientAttachmentScope & { type: 'background_task'; toolUseId?: string };
 export type ClientSetModel = ClientAttachmentScope & { type: 'set_model'; model: string };
 export type ClientSetMode = ClientAttachmentScope & { type: 'set_permission_mode'; mode: PermissionMode };
 export type ClientRefreshHistory = ClientAttachmentScope & { type: 'refresh_history' };
 export type ClientSessionClose = ClientAttachmentScope & { type: 'session_close'; sessionId: string };
 export type ClientListSessions = { type: 'list_sessions' };
-export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose | ClientListSessions;
+export type ClientMessage = ClientHello | ClientUserMessage | ClientPermissionResponse | ClientPlanResponse | ClientInterrupt | ClientBackgroundTask | ClientSetModel | ClientSetMode | ClientRefreshHistory | ClientSessionClose | ClientListSessions;
 
 // Server → client. Attachment scope is optional so a new web bundle can still
 // talk to an older server during a rolling deploy. When present, the client

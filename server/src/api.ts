@@ -178,6 +178,25 @@ export function registerApi(
     }
   });
 
+  // Live MCP server status for one session. Session-scoped rather than global
+  // because servers are configured per project and only a running query knows
+  // whether they actually connected.
+  app.get('/api/session/mcp', async (req, reply) => {
+    const q = req.query as { sessionId?: string } | undefined;
+    if (!q?.sessionId) return reply.code(400).send({ error: 'sessionId required' });
+    const session = sm.get(q.sessionId);
+    if (!session) return reply.code(404).send({ error: 'Session not found' });
+    const probe = session as unknown as { mcpStatus?: () => Promise<unknown[]> };
+    if (typeof probe.mcpStatus !== 'function') {
+      return reply.code(501).send({ error: 'This provider does not report MCP status' });
+    }
+    try {
+      return { servers: await probe.mcpStatus() };
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+  });
+
   app.get('/api/live-sessions', async () => ({ sessions: sm.listSnapshots() }));
 
   // Directory browser: returns immediate sub-entries of `path`. For each dir

@@ -32,11 +32,13 @@ type Props = {
   onBranch?: (uuid: string) => void;
   /** Parent session id, so a Task card can read its subagent transcript. */
   claudeSessionId?: string;
+  /** Background a running tool without interrupting the turn. */
+  onBackground?: (toolUseId: string) => void;
   /** Turn one of Claude's suggestions into its own session. */
   onStartSuggestion?: (suggestion: SessionSuggestion) => void;
 };
 
-function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop, onBranch, onStartSuggestion, claudeSessionId }: Props) {
+function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop, onBranch, onStartSuggestion, claudeSessionId, onBackground }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -124,6 +126,7 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
             onBranch={onBranch}
             onStartSuggestion={onStartSuggestion}
             claudeSessionId={claudeSessionId}
+            onBackground={onBackground}
           />
         ))}
         {streamingText && busy && (
@@ -147,7 +150,7 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
 
 export const MessageList = memo(MessageListImpl);
 
-type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit' | 'onBranch' | 'onStartSuggestion' | 'claudeSessionId'>;
+type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit' | 'onBranch' | 'onStartSuggestion' | 'claudeSessionId' | 'onBackground'>;
 
 /**
  * Start a side chat from this point. Only offered where the transcript id is
@@ -168,7 +171,7 @@ function BranchButton({ uuid, onBranch }: { uuid?: string; onBranch?: (uuid: str
   );
 }
 
-const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit, onBranch, onStartSuggestion, claudeSessionId }: BubbleProps) {
+const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit, onBranch, onStartSuggestion, claudeSessionId, onBackground }: BubbleProps) {
   const content = contentForSkin(skin);
   if (item.kind === 'user') {
     return (
@@ -210,7 +213,7 @@ const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId
       const pendingReqId = pendingByToolUseId.get(item.toolUseId);
       return <div className="animate-fade-up"><DiffBlock item={item} pendingReqId={pendingReqId} onAccept={onAcceptEdit} onReject={onRejectEdit} /></div>;
     }
-    return <div className="animate-fade-up"><ToolUse item={item} defaultOpen={!!item.result?.isError} token={token} cwd={cwd} claudeSessionId={claudeSessionId} /></div>;
+    return <div className="animate-fade-up"><ToolUse item={item} defaultOpen={!!item.result?.isError} token={token} cwd={cwd} claudeSessionId={claudeSessionId} onBackground={onBackground} /></div>;
   }
   if (item.kind === 'suggestion') {
     return <SuggestionCard suggestion={item.suggestion} onStart={onStartSuggestion} />;

@@ -494,6 +494,26 @@ export class ClaudeSession {
     void this.pump();
   }
 
+  /** Push in-flight foreground work (a long Bash run, a subagent) into the
+   *  background so the turn continues — the SDK's equivalent of Ctrl+B.
+   *  Without a toolUseId it backgrounds everything currently blocking. */
+  async backgroundTasks(toolUseId?: string): Promise<boolean> {
+    if (!this.query) return false;
+    return this.query.backgroundTasks(toolUseId);
+  }
+
+  /** Stop a task previously backgrounded. Ids arrive on task_notification. */
+  async stopBackgroundTask(taskId: string): Promise<void> {
+    await this.query?.stopTask(taskId);
+  }
+
+  /** Live MCP server status. Empty when no query is running rather than an
+   *  error: "no session yet" is not a failure worth surfacing. */
+  async mcpStatus(): Promise<unknown[]> {
+    if (!this.query) return [];
+    return this.query.mcpServerStatus();
+  }
+
   private updateState(delta: Partial<SessionStateSnapshot>): void {
     this.state = { ...this.state, ...delta };
     for (const l of this.stateListeners) { try { l(delta); } catch { /* */ } }

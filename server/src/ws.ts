@@ -370,6 +370,23 @@ export function registerWs(
         case 'interrupt':
           await session.interrupt();
           break;
+        case 'background_task': {
+          // Not every provider has this; Codex sessions simply do not.
+          const backgroundable = session as unknown as {
+            backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+          };
+          if (typeof backgroundable.backgroundTasks !== 'function') {
+            scopedSend(ctx, { type: 'error', message: 'This provider cannot background tasks' });
+            break;
+          }
+          try {
+            const moved = await backgroundable.backgroundTasks(msg.toolUseId);
+            if (!moved) scopedSend(ctx, { type: 'error', message: 'Nothing was running to background' });
+          } catch (error) {
+            scopedSend(ctx, { type: 'error', message: `backgroundTasks failed: ${(error as Error).message}` });
+          }
+          break;
+        }
         case 'set_model':
           try { await session.setModel(msg.model); }
           catch (error) { scopedSend(ctx, { type: 'error', message: `setModel failed: ${(error as Error).message}` }); }
