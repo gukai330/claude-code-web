@@ -14,6 +14,7 @@ import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
 import { getModelCatalog, peekModelCatalog } from './session/modelCatalog.js';
+import { SyncManager, safeRelativePath, type ConflictSide, type SyncClientConfig, type SyncOutcome, type SyncPreference } from './sync/SyncManager.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -44,7 +45,8 @@ export function registerApi(
   defaultCwd: string,
   sm: SessionManager,
   nodes: NodeRegistry = new NodeRegistry(defaultCwd),
-  runtime: { host?: string; port?: number } = {}
+  runtime: { host?: string; port?: number } = {},
+  sync: SyncManager = new SyncManager()
 ) {
   app.register(fastifyMultipart, {
     limits: {
@@ -282,6 +284,122 @@ export function registerApi(
     await sm.remove(body.sessionId);
     return { ok: true };
   });
+
+  // Sync config + unison availability for one project. Cheap; no process is
+  // spawned beyond the cached `unison -version` probe.
+  app.get('/api/sync', async (req) => {
+    const q = req.query as { cwd?: string } | undefined;
+    return sync.status(resolveSafe(q?.cwd ?? defaultCwd));
+  });
+
+  // Manual sync trigger. The lifecycle hooks (before send / after turn) are
+  // not wired yet on purpose: this endpoint exists so sync can be exercised on
+  // its own, and a sync bug never has to be told apart from a lifecycle bug.
+  app.post('/api/sync', async (req, reply) => {
+    const body = req.body as { cwd?: string; prefer?: string } | undefined;
+    const prefer = body?.prefer ?? 'none';
+    if (prefer !== 'none' && prefer !== 'client' && prefer !== 'server') {
+      return reply.code(400).send({ error: 'prefer must be "none", "client" or "server"' });
+    }
+    // `cwd` selects an entry in sync.json, it never defines one, so a token
+    // holder cannot point this at an arbitrary directory pair.
+    const result = await sync.sync(resolveSafe(body?.cwd ?? defaultCwd), { prefer: prefer as SyncPreference });
+    return reply.code(syncHttpStatus(result.outcome)).send(result);
+  });
+
+  // Create or update the sync entry for one project. This is what the "add a
+  // sync directory" option in the project picker writes; `localPath` is the
+  // path on the client machine, composed into a unison root with the shared
+  // client connection below.
+  app.post('/api/sync/project', async (req, reply) => {
+    const body = req.body as
+      | {
+          cwd?: string;
+          localPath?: string | null;
+          remote?: string | null;
+          enabled?: boolean;
+          ignore?: string[];
+          syncOnSend?: boolean;
+          syncOnIdle?: boolean;
+          timeoutMs?: number;
+        }
+      | undefined;
+    if (!body?.cwd) return reply.code(400).send({ error: 'cwd required' });
+    const result = await sync.upsertProject(resolveSafe(body.cwd), {
+      localPath: body.localPath,
+      remote: body.remote,
+      enabled: body.enabled,
+      ignore: body.ignore,
+      syncOnSend: body.syncOnSend,
+      syncOnIdle: body.syncOnIdle,
+      timeoutMs: body.timeoutMs,
+    });
+    if (!result.ok) return reply.code(400).send({ error: result.error });
+    return sync.status(result.cwd);
+  });
+
+  app.delete('/api/sync/project', async (req, reply) => {
+    const q = req.query as { cwd?: string } | undefined;
+    if (!q?.cwd) return reply.code(400).send({ error: 'cwd required' });
+    return sync.removeProject(resolveSafe(q.cwd));
+  });
+
+  // Resolve one conflicting file by letting a side win. Deliberately explicit
+  // and per-file: automatic last-writer-wins is what the whole design refuses
+  // to do, but a person asking for it by name is a different thing.
+  app.post('/api/sync/resolve', async (req, reply) => {
+    const body = req.body as { cwd?: string; path?: string; side?: string } | undefined;
+    if (!body?.cwd || !body?.path) return reply.code(400).send({ error: 'cwd and path required' });
+    if (body.side !== 'server' && body.side !== 'client') {
+      return reply.code(400).send({ error: 'side must be "server" or "client"' });
+    }
+    // A caller-supplied path that fails containment is a bad request, not a
+    // server fault — the manager reports it as a SyncResult, which would map
+    // onto 500.
+    const safe = safeRelativePath(body.path);
+    if (!safe.ok) return reply.code(400).send({ error: safe.error });
+    const result = await sync.resolveConflict(resolveSafe(body.cwd), safe.value, body.side as ConflictSide);
+    return reply.code(syncHttpStatus(result.outcome)).send(result);
+  });
+
+  // Copy the client's version of one file onto the server so both can be read.
+  // Used by "let Claude merge": the merge itself needs to understand the code,
+  // so it is a prompt, not an algorithm.
+  app.post('/api/sync/client-version', async (req, reply) => {
+    const body = req.body as { cwd?: string; path?: string } | undefined;
+    if (!body?.cwd || !body?.path) return reply.code(400).send({ error: 'cwd and path required' });
+    const safe = safeRelativePath(body.path);
+    if (!safe.ok) return reply.code(400).send({ error: safe.error });
+    const result = await sync.clientVersion(resolveSafe(body.cwd), safe.value);
+    if (!result.ok) return reply.code(400).send({ error: result.error });
+    return { path: result.path };
+  });
+
+  // How the server reaches the client, shared by every project. Reverse
+  // tunnel or direct LAN address only changes these values.
+  app.post('/api/sync/client', async (req, reply) => {
+    const body = req.body as { client?: SyncClientConfig | null } | undefined;
+    const result = await sync.setClient(body?.client ?? null);
+    if (!result.ok) return reply.code(400).send({ error: result.error });
+    return { client: result.client };
+  });
+}
+
+function syncHttpStatus(outcome: SyncOutcome): number {
+  switch (outcome) {
+    // A conflict is a reported outcome, not a transport failure: unison ran,
+    // nothing was overwritten, and the body says what was skipped.
+    case 'ok':
+    case 'conflicts':
+      return 200;
+    case 'not_configured':
+    case 'disabled':
+      return 409;
+    case 'unavailable':
+      return 503;
+    default:
+      return 500;
+  }
 }
 
 function resolveSafe(p: string): string {

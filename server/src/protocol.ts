@@ -169,6 +169,66 @@ export type ServerHeartbeat = ServerAttachmentScope & {
 };
 export type ServerError = ServerAttachmentScope & { type: 'error'; message: string };
 
+// ---------------------------------------------------------------- file sync
+// These live here rather than in sync/SyncManager.ts because they cross the
+// wire: the UI renders a sync result, so it is shared vocabulary like every
+// other type in this file. See design/sync.md.
+
+/** Which side wins a genuine conflict. 'none' passes no `-prefer` to unison,
+ *  so both-sides-changed is skipped and reported rather than resolved. */
+export type SyncPreference = 'none' | 'client' | 'server';
+
+export type SyncOutcome =
+  | 'ok'
+  | 'conflicts'
+  | 'error'
+  | 'disabled'
+  | 'not_configured'
+  | 'unavailable';
+
+export type SyncItem = { path: string; reason?: string };
+
+export type SyncResult = {
+  cwd: string;
+  outcome: SyncOutcome;
+  /** One line, safe to show in the UI as-is. */
+  message: string;
+  prefer: SyncPreference;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  transferred: number;
+  skipped: number;
+  failed: number;
+  /** Items unison started and could not finish. Neither transferred nor
+   *  failed in its own accounting, but the trees do not agree. */
+  partiallyTransferred: number;
+  conflicts: SyncItem[];
+  failures: SyncItem[];
+  partial: SyncItem[];
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  /** Tail of unison's combined output, for when something went wrong. */
+  output: string;
+};
+
+/** Where a sync was triggered from. `before_send` blocks the turn; the other
+ *  two are advisory. */
+export type SyncHook = 'manual' | 'before_send' | 'after_turn';
+
+/** Progress for one sync run. A silent multi-second pause on a weak link
+ *  reads as a hang, so `running` is sent before the work starts. */
+export type ServerSyncStatus = ServerAttachmentScope & {
+  type: 'sync_status';
+  hook: SyncHook;
+  cwd: string;
+  phase: 'running' | 'done';
+  message: string;
+  /** Present when phase is 'done'. */
+  result?: SyncResult;
+};
+
 export type ServerMessage =
   | ServerReady
   | ServerSdkEvent
@@ -179,4 +239,5 @@ export type ServerMessage =
   | ServerSessionsUpdate
   | ServerStateUpdate
   | ServerHeartbeat
+  | ServerSyncStatus
   | ServerError;

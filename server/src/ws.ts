@@ -18,6 +18,7 @@ import {
 } from './protocol.js';
 import type { SessionEvent } from './session/ClaudeSession.js';
 import type { SessionManager } from './session/SessionManager.js';
+import type { SyncCoordinator } from './sync/SyncCoordinator.js';
 import { buildReplayBatches, WsSendQueue } from './wsSendQueue.js';
 import type { HistoryLoadMetadata } from './session/ReplayBuffer.js';
 
@@ -53,7 +54,8 @@ export function registerWs(
   sm: SessionManager,
   token: string,
   defaultCwd: string,
-  nodes = new NodeRegistry(defaultCwd)
+  nodes = new NodeRegistry(defaultCwd),
+  syncCoordinator?: SyncCoordinator
 ) {
   app.get('/ws', { websocket: true }, (socket: WebSocket, req) => {
     const writer = new WsSendQueue(socket);
@@ -165,6 +167,24 @@ export function registerWs(
           else sendControl(ctx, control);
         })
       );
+
+      // Sync progress rides the same channel, scoped to this session: a
+      // multi-second pause with no frames reads as a hang on a weak link.
+      if (syncCoordinator) {
+        ctx.unsubs.push(
+          syncCoordinator.subscribe((event) => {
+            if (!isCurrent(ctx) || event.sessionId !== ctx.sessionId) return;
+            scopedSend(ctx, {
+              type: 'sync_status',
+              hook: event.hook,
+              cwd: event.cwd,
+              phase: event.phase,
+              message: event.message,
+              result: event.result,
+            }, 'control');
+          })
+        );
+      }
 
       const initialHistory = await probeHistoryMetadata(s);
       if (!isCurrent(ctx)) return;
@@ -320,9 +340,27 @@ export function registerWs(
       const session = ctx.session;
 
       switch (msg.type) {
-        case 'user':
+        case 'user': {
+          // Hook ①: the tree must be current before Claude starts. Awaited,
+          // and a failure blocks the send rather than degrading into a warning
+          // on an inconsistent tree.
+          if (syncCoordinator) {
+            let blocked: string | null = null;
+            try {
+              blocked = await syncCoordinator.beforeSend(ctx.sessionId, session.getState().cwd);
+            } catch (error) {
+              blocked = `Sync before send failed: ${(error as Error).message}`;
+            }
+            // The await gives the client time to detach or switch sessions.
+            if (!isCurrent(ctx)) return;
+            if (blocked) {
+              scopedSend(ctx, { type: 'error', message: blocked });
+              break;
+            }
+          }
           session.sendUser(msg.text);
           break;
+        }
         case 'permission_response':
           session.permissionBroker.resolve(msg.reqId, { decision: msg.decision, scope: msg.scope });
           break;

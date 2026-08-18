@@ -9,6 +9,8 @@ import { registerWs } from './ws.js';
 import { registerApi } from './api.js';
 import { timingSafeEqualStr } from './auth.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
+import { SyncManager } from './sync/SyncManager.js';
+import { SyncCoordinator } from './sync/SyncCoordinator.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,6 +25,8 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
   const app = Fastify({ logger: { level: 'info' } });
   const sm = new SessionManager();
   const nodes = new NodeRegistry(opts.defaultCwd);
+  const sync = new SyncManager();
+  const syncCoordinator = new SyncCoordinator(sm, sync);
 
   await app.register(fastifyWebsocket);
 
@@ -60,13 +64,14 @@ export async function startServer(opts: StartOptions): Promise<FastifyInstance> 
     return { ok: true };
   });
 
-  registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port });
-  registerWs(app, sm, opts.token, opts.defaultCwd, nodes);
+  registerApi(app, opts.token, opts.defaultCwd, sm, nodes, { host: opts.host, port: opts.port }, sync);
+  registerWs(app, sm, opts.token, opts.defaultCwd, nodes, syncCoordinator);
 
   const host = opts.host ?? '127.0.0.1';
   await app.listen({ host, port: opts.port });
 
   const shutdown = async () => {
+    try { syncCoordinator.dispose(); } catch { /* */ }
     try { await sm.closeAll(); } catch { /* */ }
     try { await app.close(); } catch { /* */ }
     process.exit(0);
