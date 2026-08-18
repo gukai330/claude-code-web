@@ -93,6 +93,14 @@ remote**.
 
 ## Environment gotchas
 
+- **UI components cannot be render-tested if they draw an `<Icon>`.**
+  `Icon.tsx`'s only react import is `import type { SVGProps }`, so under
+  `tsx --test` (which finds no tsconfig from the repo root and falls back to
+  the classic JSX transform) the emitted `React.createElement` has nothing to
+  bind to: `ReferenceError: React is not defined`. Existing render tests pass
+  only because they never reach a branch that draws one. Test the pure
+  functions instead — that is why `sync-ui.test.ts` asserts on `deriveStatus`
+  and `previewRemote` rather than on markup.
 - **The test suite assumes a POSIX layout.** On Windows 4–5 tests fail before
   any local change, because `os.tmpdir()` sits *inside* `os.homedir()` there,
   so fixtures that create an "outside the project" directory land inside an
@@ -105,6 +113,12 @@ remote**.
   and only fails at runtime with `SyntaxError: Unexpected token '?'`.
 - Git is checked out CRLF on Windows; new files written LF produce a wall of
   harmless `trailing whitespace` warnings from `git apply`.
+- **unison must be installed on both ends and the versions must match** — it
+  negotiates a wire protocol and refuses to run across a mismatch. Ubuntu
+  jammy ships 2.51.5; the official Windows builds are on the project's GitHub
+  releases, so pick a version that exists for both. `SyncManager` reports a
+  missing binary as `outcome: "unavailable"` rather than failing the sync, and
+  re-probes on every call so installing it needs no server restart.
 
 ## Conventions
 
@@ -120,4 +134,102 @@ remote**.
 
 ## In progress
 
-See [design/sync.md](design/sync.md) for the bidirectional file-sync design.
+Bidirectional file sync — [design/sync.md](design/sync.md) has the design and
+the reasoning behind the rejected alternatives. **All four build steps are
+done and uncommitted**, server and UI.
+`~/.claudecode-web/sync.json` currently holds a throwaway `/tmp/ccw-sync`
+entry, not a real project. Four scripts drive the live checks:
+`/tmp/ccw-smoke.sh` (sync + conflict), `/tmp/ccw-config.sh` (config
+endpoints), `/tmp/ccw-hook.sh` (hook ① over a real websocket, spends no
+tokens because the block happens before Claude is invoked), `/tmp/ccw-turn.sh`
+(a real Claude turn, to prove hook ② propagates what it wrote).
+
+**`web/dist` is not rebuilt.** The server on 8080 runs `server/dist` and
+serves `web/dist`, both predating this work, so none of it is live until
+someone rebuilds and restarts. Both bundles resolve the *same* `web/dist`
+path, so a UI built from this tree cannot be previewed without displacing the
+running one — back it up first if you try.
+
+- `server/src/sync/SyncManager.ts` owns config, unison invocation and output
+  parsing, and nothing else — it has no reference to sessions or the websocket.
+  Constructed once in `index.ts` and passed to `registerApi`, so the hooks can
+  share the instance later.
+- `server/src/sync/SyncCoordinator.ts` is the only place that knows about both
+  sessions and sync. It reads idle transitions off the snapshots
+  `SessionManager` already broadcasts, so **`SessionManager` is not modified at
+  all** — no new coupling in the session layer.
+- Endpoints, all token-gated:
+  - `GET /api/sync?cwd=` — config, composed remote, unison availability, last
+    result. `POST /api/sync {cwd, prefer?}` — run it now. `cwd` *selects* an
+    entry in `~/.claudecode-web/sync.json` and can never define one, so a token
+    holder cannot aim the endpoint at an arbitrary directory pair.
+  - `POST /api/sync/project {cwd, localPath|remote, …}` / `DELETE
+    /api/sync/project?cwd=` — the write side, which the project picker's
+    "sync directory" option will call. Patch semantics: absent leaves a field
+    alone, `null` clears it.
+  - `POST /api/sync/client {client}` — how the server reaches the client,
+    shared by every project.
+- **`localPath` is composed, not stored raw.** One `client` block
+  (`{user, host, port}`) plus a per-project `localPath` becomes
+  `ssh://user@host//C:/Users/me/proj`, with a non-default port going to
+  `-sshargs "-p N"` because not every unison version parses a port inside the
+  URI. Backslashes are normalised — a URI cannot carry them. Whether the link
+  is a reverse tunnel (`localhost:2222`) or a direct LAN address
+  (`192.168.0.30:22`) only changes those values, never the code.
+- The config file has two shapes: the original bare map of project path →
+  entry, and the current one nesting them under `projects` alongside `client`.
+  Both are read; only the current one is written, so the first write migrates.
+  Writes are read-modify-write under a single-writer chain, then
+  write-tmp-and-rename — a crash mid-write must not leave a truncated file that
+  reads as "no projects configured". A machine write drops `//` comments.
+- UI: `web/src/components/SyncFolderPanel.tsx` is the "sync directory" option
+  in the project picker — one shared client connection plus the folder on the
+  user's own machine, with a live preview of the composed unison root.
+  Saving a `localPath` deliberately clears any hand-written `remote`, because
+  `remote` outranks it on the server and would otherwise silently ignore the
+  path just typed. `StatusBar` grows a `syncing` state so a multi-second pause
+  before a message is sent does not read as a hang.
+- Conflict resolution is per-file and always explicit. `POST /api/sync/resolve
+  {cwd, path, side}` runs unison restricted to that one path
+  (`-path <p> -prefer <root>`), so choosing a winner cannot disturb the rest of
+  the tree. **This is the only place last-writer-wins is allowed**, because a
+  person asked for it by name. `POST /api/sync/client-version` copies the
+  client's copy into the OS temp dir — never into the project, which is still
+  mid-conflict — so "let Claude merge" can hand over both versions as a prompt.
+  Paths are validated by `safeRelativePath` at the endpoint (a caller's bad
+  path is a 400) *and* in the manager, since the manager is also called by the
+  hooks.
+- **Hook ① blocks the send unless the outcome is exactly `ok`.** Conflicts
+  block too: both sides changed, so the tree Claude would start on is not the
+  one the user is looking at. The frame sequence a client sees is
+  `sync_status(running)` → `sync_status(done)` → `error`, and `sendUser` is
+  never reached. Hook ② is fire-and-forget after the turn and blocks nothing.
+- **Conflicts are HTTP 200** with `outcome: "conflicts"` — unison ran and
+  refused to guess, which is a result, not a transport failure. 409 = not
+  configured or disabled, 503 = unison missing, 500 = unison failed.
+- **`prefer` defaults to `none` and nothing selects otherwise.** `client` /
+  `server` map to unison's `-prefer <root>`, which is silent last-writer-wins;
+  the design forbids that for a genuine conflict. The directional values exist
+  for the hooks to opt into deliberately — the design's per-hook preference
+  table and its "genuine conflict → neither" rule cannot both hold, and this
+  code resolves that in favour of the latter.
+- unison has no machine-readable output, so `parseUnisonOutput` reads the text
+  UI: the `Synchronization complete/incomplete at … (N transferred, M skipped,
+  K failed)` line plus the `skipped:`/`failed:` details printed under it, with
+  the `[CONFLICT] Skipping …` and `<-?->` markers as a fallback when unison
+  dies early. Formats captured from a real 2.51.5, not taken from the manual.
+- **unison's exit code is not usable and nothing here reads it as truth.**
+  Measured on 2.51.5: `Fatal error: Lost connection with the server` and
+  `unison: unknown option` **both exit 0** — the failure cases return the
+  success code. A skipped conflict is worse than wrong, it is unstable: exit
+  **1** when unison is spawned from Node, **0** when the identical argv runs
+  from a shell on the same host. The documented 0/1/2/3 scheme cannot be
+  relied on in either direction. `classify()` therefore requires *evidence the
+  run finished* — a summary line, or unison's `Nothing to do:` shortcut — and
+  treats its absence as an error. Keying off the exit code would report a sync
+  that never connected as `ok`, which at hook ① means Claude starting on a
+  stale tree.
+- The summary line has an optional `N partially transferred` clause that only
+  appears when something got stuck mid-copy (an unreadable file, a dropped
+  link). It is treated as an error, not a conflict: the item is in neither
+  state and the trees do not agree.
