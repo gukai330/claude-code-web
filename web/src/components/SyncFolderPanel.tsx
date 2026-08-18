@@ -219,7 +219,9 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
   const connectionKnown = !!status?.client && !editingClient;
 
   return (
-    <section className="mt-3 rounded-md border border-border-subtle bg-bg-base p-3">
+    // The launcher toolbar does not scroll, so a panel taller than the space
+    // left simply loses its bottom — buttons included. Carry a scrollbar.
+    <section className="mt-3 max-h-[46vh] overflow-y-auto overscroll-contain rounded-md border border-border-subtle bg-bg-base p-3">
       <header className="flex items-center gap-2">
         <Icon name="copy" size={15} className="shrink-0 text-accent" />
         <h3 className="text-sm font-medium text-text-primary">Keep this folder on your computer too</h3>
