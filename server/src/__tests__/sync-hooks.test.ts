@@ -96,12 +96,15 @@ test('a Windows path keeps its drive letter and loses its backslashes', () => {
   assert.equal(resolved.value.remote, 'ssh://gukai@localhost//C:/Users/Gukai/proj');
   // A non-default port becomes an ssh argument, not part of the URI: not
   // every unison version parses a port inside ssh://.
-  assert.deepEqual(resolved.value.sshargs, ['-p', '2222']);
+  assert.equal(resolved.value.sshargs[resolved.value.sshargs.indexOf('-p') + 1], '2222');
+  // BatchMode cannot answer an unknown-host prompt, so the policy travels with
+  // every invocation — including the one unison makes for itself.
+  assert.ok(resolved.value.sshargs.includes('StrictHostKeyChecking=accept-new'));
 });
 
-test('port 22 adds no ssh arguments', () => {
+test('port 22 adds no port argument', () => {
   const resolved = resolveProject({ ...baseConfig, localPath: '/srv/x' }, { host: 'h', port: 22 });
-  assert.equal(resolved.ok && resolved.value.sshargs.length, 0);
+  assert.equal(resolved.ok && resolved.value.sshargs.includes('-p'), false);
 });
 
 test('an explicit remote wins over localPath and needs no client', () => {

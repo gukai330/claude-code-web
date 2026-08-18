@@ -282,7 +282,7 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
                 <Field
                   label="Folder on your computer"
                   value={form.localPath}
-                  placeholder="/home/you/projects/foo"
+                  placeholder={String.raw`C:\Users\you\projects\foo` + "  —  paste it, quotes and all"}
                   onChange={(localPath) => setForm((f) => ({ ...f, localPath }))}
                 />
               </div>

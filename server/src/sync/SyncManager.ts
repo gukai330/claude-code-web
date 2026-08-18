@@ -35,6 +35,12 @@ const IGNORE_SPEC = /^(Path|Name|Regex|BelowPath)\s+\S/;
  *  are printed at the end. */
 const OUTPUT_LIMIT = 256 * 1024;
 const OUTPUT_TAIL_LIMIT = 8 * 1024;
+/** BatchMode cannot answer the "unknown host, continue?" prompt, so an
+ *  unconfigured pair fails with "Host key verification failed" and no way
+ *  forward. `accept-new` trusts a first sighting and still refuses a key that
+ *  has *changed*, which is the case actually worth refusing. */
+const HOST_KEY_ARGS = ['-o', 'StrictHostKeyChecking=accept-new'];
+
 /** Drive letter, leading slash, or UNC share. */
 const ABSOLUTE_CLIENT_PATH = /^([A-Za-z]:[\\/]|[\\/])/;
 
@@ -315,16 +321,17 @@ export class SyncManager {
       // irrelevant — and a Windows client still takes forward slashes over ssh.
       const remoteFile = posix.join(clientRoot.path, safe.value);
       const args = [
-        ...(clientRoot.port && clientRoot.port !== 22 ? ['-p', String(clientRoot.port)] : []),
-        '-o', 'BatchMode=yes',
-        clientRoot.user ? `${clientRoot.user}@${clientRoot.host}` : clientRoot.host,
+        ...sshArgs({ host: clientRoot.host, user: clientRoot.user, port: clientRoot.port }),
         'cat',
         '--',
         remoteFile,
       ];
       const exec = await runProcess('ssh', args, { timeoutMs: prepared.plan.config.timeoutMs });
       if (exec.code !== 0) {
-        return { ok: false, error: lastMeaningfulLine(exec.output) || `ssh exited ${exec.code}` };
+        return {
+          ok: false,
+          error: explainSshFailure(exec.output) || lastMeaningfulLine(exec.output) || `ssh exited ${exec.code}`,
+        };
       }
       await writeFile(target, exec.output);
       return { ok: true, path: target };
@@ -355,7 +362,10 @@ export class SyncManager {
 
       const exec = await runProcess('ssh', [...sshArgs(client), command.value], { timeoutMs: 20_000 });
       if (exec.code !== 0) {
-        return { ok: false, error: lastMeaningfulLine(exec.output) || `ssh exited ${exec.code}` };
+        return {
+          ok: false,
+          error: explainSshFailure(exec.output) || lastMeaningfulLine(exec.output) || `ssh exited ${exec.code}`,
+        };
       }
 
       const lines = exec.output.split(/\r?\n/).map((l) => l.replace(/\r$/, '')).filter((l) => l.length > 0);
@@ -612,11 +622,15 @@ export function resolveProject(
   // unison reads `//` after the host as "absolute path". A Windows path has no
   // leading slash of its own, so one is added: C:/proj -> ssh://host//C:/proj
   const remote = `ssh://${userAt}${client.host}/${path.startsWith('/') ? path : `/${path}`}`;
-  const sshargs = config.sshargs.length > 0
-    ? config.sshargs
-    : client.port && client.port !== 22
-      ? ['-p', String(client.port)]
-      : [];
+  const sshargs = [
+    ...(config.sshargs.length > 0
+      ? config.sshargs
+      : client.port && client.port !== 22
+        ? ['-p', String(client.port)]
+        : []),
+    // unison spawns its own ssh, so the same policy has to travel with it.
+    ...HOST_KEY_ARGS,
+  ];
   return {
     ok: true,
     value: {
@@ -748,6 +762,8 @@ function describe(outcome: SyncOutcome, exec: ExecResult, parsed: ParsedOutput):
         const where = partial ? ` (${partial.path})` : '';
         return `unison only partially transferred ${Math.max(parsed.partiallyTransferred, parsed.partial.length)} item(s)${where} — the trees do not agree`;
       }
+      const ssh = explainSshFailure(exec.output);
+      if (ssh) return ssh;
       const fatal = lastMeaningfulLine(exec.output);
       if (fatal) return fatal;
       return exec.code === null || exec.code === 0
@@ -909,6 +925,7 @@ function sshArgs(client: SyncClientConfig): string[] {
     ...(client.port && client.port !== 22 ? ['-p', String(client.port)] : []),
     '-o', 'BatchMode=yes',
     '-o', 'ConnectTimeout=10',
+    ...HOST_KEY_ARGS,
     client.user ? `${client.user}@${client.host}` : client.host,
   ];
 }
@@ -945,9 +962,17 @@ export function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-function normaliseClientPath(p: string): string {
-  // A Windows user types C:\Users\me\proj; a URI cannot carry backslashes.
-  return p.trim().replace(/\\/g, '/').replace(/\/+$/, '');
+/** Whatever a Windows user actually pastes. Explorer's "Copy as path" wraps
+ *  the result in double quotes, a drag-drop can leave a trailing separator,
+ *  and a URI cannot carry backslashes at all. */
+export function normaliseClientPath(p: string): string {
+  const unquoted = p.trim().replace(/^["']+/, '').replace(/["']+$/, '').trim();
+  const forward = unquoted.replace(/\\/g, '/');
+  // Strip trailing separators but never the last one of a root: C:/ and / are
+  // both still absolute, and `C:` alone is not.
+  return forward.replace(/(?!^)\/+$/, (match, offset: number) =>
+    offset > 0 && /^[A-Za-z]:$/.test(forward.slice(0, offset)) ? '/' : ''
+  );
 }
 
 function parseClientConfig(
@@ -1181,6 +1206,25 @@ function emptyResult(
     timedOut: false,
     output: '',
   };
+}
+
+/** ssh's own wording for a changed key is a wall of asterisks that says
+ *  nothing about what to do. */
+function explainSshFailure(output: string): string | null {
+  if (/REMOTE HOST IDENTIFICATION HAS CHANGED|Host key verification failed/i.test(output)) {
+    return (
+      'The other machine presented a different SSH host key than last time. If you re-created ' +
+      'the tunnel or reinstalled its SSH server this is expected — remove its line from the ' +
+      "server's ~/.ssh/known_hosts and try again."
+    );
+  }
+  if (/Permission denied|Too many authentication failures/i.test(output)) {
+    return (
+      'The other machine refused the login. Add this server\'s public key to its ' +
+      'authorized_keys — a password prompt cannot be answered from here.'
+    );
+  }
+  return null;
 }
 
 function lastMeaningfulLine(output: string): string {

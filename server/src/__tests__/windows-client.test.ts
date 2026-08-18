@@ -39,7 +39,9 @@ test('a non-default port becomes an ssh argument, not part of the URI', () => {
   );
   assert.equal(r.ok && r.value.remote, 'ssh://Gukai@localhost//D:/work/repo');
   // Not every unison version parses a port inside ssh://.
-  assert.deepEqual(r.ok && r.value.sshargs, ['-p', '2222']);
+  const args = r.ok ? r.value.sshargs : [];
+  assert.equal(args[args.indexOf('-p') + 1], '2222');
+  assert.ok(args.includes('StrictHostKeyChecking=accept-new'));
 });
 
 test('a trailing separator does not double up in the root', () => {
