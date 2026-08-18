@@ -195,6 +195,9 @@ export function statusCopyForSkin(skin: SkinId, status: StatusKind): { label: st
   switch (status.kind) {
     case 'idle':
       return { label: '' };
+    // Sync labels come from unison via the server, so there is nothing to skin.
+    case 'syncing':
+      return { label: status.message };
     case 'connection-lost':
       return skin === 'cyberpunk'
         ? { label: 'NET LINK LOST' }

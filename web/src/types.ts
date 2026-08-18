@@ -124,7 +124,79 @@ export type ServerSessionsUpdate = { type: 'sessions_update'; sessions: SessionS
 export type ServerStateUpdate = ServerAttachmentScope & { type: 'state_update'; state: Partial<SessionStateSnapshot> };
 export type ServerHeartbeat = ServerAttachmentScope & { type: 'heartbeat'; now: number; session?: SessionStateSnapshot; noActivityMs?: number };
 export type ServerError = ServerAttachmentScope & { type: 'error'; message: string };
-export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerPendingControl | ServerSessionsUpdate | ServerStateUpdate | ServerHeartbeat | ServerError;
+export type ServerSyncStatus = ServerAttachmentScope & { type: 'sync_status'; hook: SyncHook; cwd: string; phase: 'running' | 'done'; message: string; result?: SyncResult };
+export type ServerMessage = ServerReady | ServerSdkEvent | ServerSdkEventBatch | ServerPermissionRequest | ServerPlanProposed | ServerPendingControl | ServerSessionsUpdate | ServerStateUpdate | ServerHeartbeat | ServerSyncStatus | ServerError;
+
+// ------------------------------------------------------------- file sync
+// Mirrors the sync block in server/src/protocol.ts. See design/sync.md.
+export type SyncPreference = 'none' | 'client' | 'server';
+export type SyncOutcome = 'ok' | 'conflicts' | 'error' | 'disabled' | 'not_configured' | 'unavailable';
+export type SyncHook = 'manual' | 'before_send' | 'after_turn';
+export type SyncItem = { path: string; reason?: string };
+
+export type SyncResult = {
+  cwd: string;
+  outcome: SyncOutcome;
+  message: string;
+  prefer: SyncPreference;
+  startedAt: number;
+  finishedAt: number;
+  durationMs: number;
+  transferred: number;
+  skipped: number;
+  failed: number;
+  partiallyTransferred: number;
+  conflicts: SyncItem[];
+  failures: SyncItem[];
+  partial: SyncItem[];
+  exitCode: number | null;
+  timedOut: boolean;
+  output: string;
+};
+
+/** How the server reaches this machine. One entry for every project. */
+export type SyncClientConfig = { user?: string; host: string; port?: number };
+
+export type SyncProjectConfig = {
+  enabled: boolean;
+  localPath?: string;
+  remote?: string;
+  ignore: string[];
+  syncOnSend: boolean;
+  syncOnIdle: boolean;
+  sshargs: string[];
+  timeoutMs: number;
+};
+
+export type UnisonInfo = { available: boolean; command: string[]; version?: string; error?: string };
+
+/** Response shape of GET /api/sync. */
+export type SyncStatus = {
+  cwd: string;
+  configFile: string;
+  configured: boolean;
+  enabled: boolean;
+  config?: SyncProjectConfig;
+  /** localPath + client, composed by the server into a unison root. */
+  remote?: string;
+  client?: SyncClientConfig;
+  configError?: string;
+  unison: UnisonInfo;
+  running: boolean;
+  last?: SyncResult;
+};
+
+/** Default ignores offered when a folder is first set up for sync. Large,
+ *  regenerable, or machine-specific trees that would dominate the transfer. */
+export const DEFAULT_SYNC_IGNORES = [
+  'Path .git',
+  'Path node_modules',
+  'Path dist',
+  'Path build',
+  'Path .venv',
+  'Path __pycache__',
+  'Path target',
+];
 
 export type SdkEvent = {
   type: string;

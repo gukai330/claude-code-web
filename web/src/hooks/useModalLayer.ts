@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 
-export type TopLevelModal = 'setup' | 'permission' | 'plan' | 'project' | 'palette';
+export type TopLevelModal = 'setup' | 'permission' | 'plan' | 'project' | 'syncConflicts' | 'palette';
 
 export type TopLevelModalFlags = Record<TopLevelModal, boolean>;
 
@@ -10,6 +10,9 @@ export function resolveTopLevelModal(flags: TopLevelModalFlags): TopLevelModal |
   if (flags.permission) return 'permission';
   if (flags.plan) return 'plan';
   if (flags.project) return 'project';
+  // Above the palette: an unresolved conflict means the two trees disagree,
+  // which blocks the next message anyway.
+  if (flags.syncConflicts) return 'syncConflicts';
   if (flags.palette) return 'palette';
   return null;
 }

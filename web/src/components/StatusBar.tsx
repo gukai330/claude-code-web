@@ -15,7 +15,8 @@ export type StatusKind =
   | { kind: 'running-tool'; name: string; seconds: number; inputSummary?: string }
   | { kind: 'writing' }
   | { kind: 'thinking' }
-  | { kind: 'stalled'; seconds: number };
+  | { kind: 'stalled'; seconds: number }
+  | { kind: 'syncing'; message: string; tone: 'info' | 'warning' | 'danger' };
 
 type Props = {
   connection: ConnectionState;
@@ -27,8 +28,13 @@ type Props = {
   pendingEditCount: number;
   hasPlan: boolean;
   secondsSinceLastEvent: number;
+  /** File sync progress. Only set while a sync is running or just finished —
+   *  a multi-second pause before a message is sent otherwise reads as a hang. */
+  sync?: { message: string; tone: 'info' | 'warning' | 'danger' };
   skin?: SkinId;
   onFocusPending?: () => void;
+  /** Open the conflict resolver. Only offered when a sync actually failed. */
+  onReviewSync?: () => void;
   onStop?: () => void;
 };
 
@@ -41,6 +47,9 @@ export function deriveStatus(p: Props): StatusKind {
   if (p.hasPermReq || p.pendingEditCount > 0) {
     return { kind: 'approval-needed', count: (p.hasPermReq ? 1 : 0) + p.pendingEditCount };
   }
+  // Sync runs between turns, so it can only be reported while nothing else is
+  // in flight — but it outranks 'idle', which would render nothing at all.
+  if (p.sync) return { kind: 'syncing', message: p.sync.message, tone: p.sync.tone };
   if (!p.busy) return { kind: 'idle' };
   if (p.busy && p.streamingText) return { kind: 'writing' };
   if (p.activeTool) return {
@@ -77,6 +86,8 @@ function kindToView(k: StatusKind, skin: SkinId): { tone: Tone; icon: IconName; 
     case 'writing': return { tone: 'info', icon: 'sparkles', label: copy.label, pulse: true };
     case 'stalled': return { tone: 'warning', icon: 'clock', label: copy.label, pulse: true, hint: copy.hint };
     case 'thinking': return { tone: 'info', icon: 'brain', label: copy.label, pulse: true, hint: copy.hint };
+    // The label is unison's own wording, so it is not skinned.
+    case 'syncing': return { tone: k.tone, icon: 'copy', label: k.message, pulse: k.tone === 'info' };
   }
 }
 
@@ -104,6 +115,7 @@ export function StatusBar(p: Props) {
   if (!view) return null;
   const showButton = (k.kind === 'plan-approval' || k.kind === 'approval-needed') && !!p.onFocusPending;
   const showStop = (k.kind === 'stalled' || k.kind === 'running-tool') && !!p.onStop;
+  const showResolve = k.kind === 'syncing' && k.tone === 'danger' && !!p.onReviewSync;
 
   return (
     <div
@@ -124,6 +136,14 @@ export function StatusBar(p: Props) {
           className="text-[11px] px-2 py-0.5 rounded bg-current/10 hover:bg-current/20 transition-colors duration-hover font-medium"
         >
           {content.status.review} →
+        </button>
+      )}
+      {showResolve && (
+        <button
+          onClick={p.onReviewSync}
+          className="text-[11px] px-2 py-0.5 rounded bg-current/10 hover:bg-current/20 transition-colors duration-hover font-medium"
+        >
+          Resolve →
         </button>
       )}
       {showStop && (

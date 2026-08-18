@@ -3,6 +3,7 @@ import { normalizeProjectPath, projectName, type ProjectEntry } from '../project
 import { Icon } from './Icon';
 import { appUrl } from '../appUrl';
 import { useFocusTrap } from '../hooks/useFocusTrap';
+import { SyncFolderPanel } from './SyncFolderPanel';
 
 type DirsResponse = { path: string; parent: string | null; dirs: string[] };
 
@@ -27,6 +28,7 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
   const [newFolderOpen, setNewFolderOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
   const [creatingFolder, setCreatingFolder] = useState(false);
+  const [syncOpen, setSyncOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const titleId = useId();
@@ -35,6 +37,10 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
     if (newFolderOpen) {
       setNewFolderOpen(false);
       setNewFolderName('');
+      return;
+    }
+    if (syncOpen) {
+      setSyncOpen(false);
       return;
     }
     onClose();
@@ -182,6 +188,17 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
                 <Icon name="folder-plus" size={14} />
                 New Folder
               </button>
+              <button
+                type="button"
+                onClick={() => setSyncOpen((open) => !open)}
+                aria-expanded={syncOpen}
+                className={`h-8 shrink-0 rounded-sm border px-2.5 text-xs transition-colors duration-hover inline-flex items-center gap-1.5 ${syncOpen ? 'border-accent bg-bg-hover text-text-primary' : 'border-border-subtle bg-bg-base text-text-secondary hover:border-border hover:bg-bg-hover hover:text-text-primary'}`}
+                aria-label="Sync folder with your computer"
+                title="Keep the selected folder on your computer too"
+              >
+                <Icon name="copy" size={14} />
+                Sync Folder
+              </button>
             </div>
             <Breadcrumb path={browsePath} onPick={openPath} />
             {newFolderOpen && (
@@ -215,6 +232,16 @@ export function ProjectLauncher({ token, current, recents, pinned, busy, onClose
                   <Icon name="x" size={13} />
                 </button>
               </form>
+            )}
+            {syncOpen && (
+              // Keyed on the selected path: browsing to a different folder must
+              // reload the panel rather than silently keep the old one's config.
+              <SyncFolderPanel
+                key={selectedPath}
+                token={token}
+                cwd={selectedPath || browsePath}
+                onClose={() => setSyncOpen(false)}
+              />
             )}
             <div className="mt-2 text-[11px] text-text-muted">Browsing folders on the machine running claudecode-web.</div>
             {busy && <div className="mt-2 text-[11px] text-warning">Current chat will keep working in Activity.</div>}

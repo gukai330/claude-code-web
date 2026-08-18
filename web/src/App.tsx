@@ -6,7 +6,7 @@ import { buildReconnectHello } from './reconnect';
 import { createAttachId, isMessageForAttachment, readyUsesExplicitReplay, replayModeForReady, withAttachId, type AttachmentViewState } from './attachment';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { AgentProviderId, ClaudeAuthInfo, ClientHello, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, setClaudeModelOptions, MODE_ORDER } from './types';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, setClaudeModelOptions, MODE_ORDER, type SyncResult } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
 import { PermissionModal } from './components/PermissionModal';
@@ -18,6 +18,7 @@ import { EmptyState } from './components/EmptyState';
 import { InitialSetup } from './components/InitialSetup';
 import { CommandPalette, type CommandAction } from './components/CommandPalette';
 import { StatusBar } from './components/StatusBar';
+import { SyncConflictModal } from './components/SyncConflictModal';
 import { useKeyboard, isMod } from './hooks/useKeyboard';
 import { blocksGlobalAppShortcuts, resolveTopLevelModal, useModalBackground } from './hooks/useModalLayer';
 import { useToast } from './components/Toast';
@@ -93,6 +94,11 @@ export function App() {
   const [renameRequest, setRenameRequest] = useState(0);
   const lastEventAtRef = useRef<number>(Date.now());
   const [secondsSinceLastEvent, setSecondsSinceLastEvent] = useState(0);
+  const [syncStatus, setSyncStatus] = useState<{ message: string; tone: 'info' | 'warning' | 'danger' } | null>(null);
+  // Kept separately from the status line: the line moves on, an unresolved
+  // conflict does not.
+  const [syncConflicts, setSyncConflicts] = useState<SyncResult | null>(null);
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [projectLauncherOpen, setProjectLauncherOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [recentProjects, setRecentProjects] = useState<ProjectEntry[]>(() => readRecentProjects());
@@ -111,6 +117,7 @@ export function App() {
     permission: !!nonEditPermReq,
     plan: !!planProposed,
     project: projectLauncherOpen,
+    syncConflicts: syncModalOpen && !!syncConflicts,
     palette: paletteOpen,
   });
   useModalBackground(backgroundRef, activeModal !== null);
@@ -516,6 +523,28 @@ export function App() {
       }
     } else if (m.type === 'plan_proposed') {
       setPlanProposed(m);
+    } else if (m.type === 'sync_status') {
+      if (m.phase === 'running') {
+        setSyncStatus({ message: m.message, tone: 'info' });
+      } else {
+        const outcome = m.result?.outcome;
+        const bad = outcome !== 'ok';
+        setSyncStatus({ message: m.message, tone: bad ? 'danger' : 'info' });
+        if (m.result && m.result.conflicts.length > 0) setSyncConflicts(m.result);
+        else if (!bad) setSyncConflicts(null);
+        // Clear the good news after a moment; leave a problem on screen.
+        if (!bad) window.setTimeout(() => setSyncStatus(null), 4000);
+        // A failed hook ① is already reported as an `error` frame, which adds
+        // its own chat item — do not say it twice. Everything else has no
+        // other channel, so a conflict there must land in the transcript.
+        if (bad && m.hook !== 'before_send') {
+          const detail = m.result?.conflicts.length
+            ? ` (${m.result.conflicts.map((c) => c.path).join(', ')})`
+            : '';
+          commitState((st) => addSystem(st, `Sync: ${m.message}${detail}`, 'error'));
+          pushToast(m.message, { level: 'error' });
+        }
+      }
     } else if (m.type === 'error') {
       if (currentAttachment.phase !== 'ready') {
         replayStateRef.current = null;
@@ -1087,6 +1116,8 @@ export function App() {
             pendingEditCount={pendingEdits.size}
             hasPlan={!!planProposed}
             secondsSinceLastEvent={secondsSinceLastEvent}
+            sync={syncStatus ?? undefined}
+            onReviewSync={syncConflicts ? () => setSyncModalOpen(true) : undefined}
             skin={skin}
             onFocusPending={firstPendingEditToolUseId ? focusPending : undefined}
             onStop={stopCurrent}
@@ -1120,6 +1151,21 @@ export function App() {
           onClose={() => setProjectLauncherOpen(false)}
           onPick={(cwd) => { setSidebarOpen(false); newSession({ cwd }); }}
           onTogglePin={toggleProjectPin}
+        />
+      )}
+      {activeModal === 'syncConflicts' && syncConflicts && (
+        <SyncConflictModal
+          token={token ?? ''}
+          cwd={syncConflicts.cwd}
+          result={syncConflicts}
+          onClose={() => setSyncModalOpen(false)}
+          onAskClaude={(prompt: string) => {
+            // Reuse the normal send path so the merge request shows up in the
+            // transcript like any other message, and optimistic echo applies.
+            if (!wsRef.current?.send({ type: 'user', text: prompt })) return false;
+            commitState((s) => (s.state ? addUserOptimistic(s, prompt) : s));
+            return true;
+          }}
         />
       )}
       {activeModal === 'permission' && nonEditPermReq && (
