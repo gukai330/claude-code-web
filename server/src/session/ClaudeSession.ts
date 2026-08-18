@@ -286,7 +286,12 @@ export class ClaudeSession {
     if (!isPartial) this.ring.push(se);
 
     for (const l of this.listeners) { try { l(se); } catch { /* */ } }
-    if (event.type === 'result') this.setRuntimeStatus('idle');
+    if (event.type === 'result') {
+      this.setRuntimeStatus('idle');
+      // A turn just ended: this is the one moment the context breakdown has
+      // both changed and stopped moving.
+      void this.refreshContextUsage();
+    }
     if (event.type === 'system' && (event as any).subtype === 'error') this.setRuntimeStatus('error');
   }
 
@@ -481,6 +486,27 @@ export class ClaudeSession {
   private updateState(delta: Partial<SessionStateSnapshot>): void {
     this.state = { ...this.state, ...delta };
     for (const l of this.stateListeners) { try { l(delta); } catch { /* */ } }
+  }
+
+  /** Best-effort: a control request against a query that may already be gone
+   *  is not worth failing a turn over, and the UI simply keeps the last value. */
+  private async refreshContextUsage(): Promise<void> {
+    const q = this.query;
+    if (!q || this.closed) return;
+    try {
+      const usage = await q.getContextUsage();
+      this.updateState({
+        contextUsage: {
+          categories: usage.categories.map((c) => ({ name: c.name, tokens: c.tokens, color: c.color })),
+          totalTokens: usage.totalTokens,
+          maxTokens: usage.maxTokens,
+          percentage: usage.percentage,
+          model: usage.model,
+        },
+      });
+    } catch {
+      /* control requests are unavailable outside streaming mode, and after close */
+    }
   }
 
   private setRuntimeStatus(runtimeStatus: SessionRuntimeStatus): void {

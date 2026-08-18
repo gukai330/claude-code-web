@@ -3,6 +3,7 @@ import type { AgentProviderId, ClaudeAuthInfo, CodexAuthInfo, NodeInfo, SessionS
 import type { SkinId } from '../skins';
 import { AgentMenu } from './AgentMenu';
 import { Icon } from './Icon';
+import { ContextMeter } from './ContextMeter';
 import { abbreviateHome } from '../pathDisplay';
 
 type Props = {
@@ -84,6 +85,14 @@ export function TopBar(p: Props) {
         />
 
         <div className="ml-auto flex items-center gap-3 text-[11px] text-text-muted">
+          {s && !s.viewerMode && (
+            <ContextMeter
+              usage={s.contextUsage}
+              tokensIn={s.tokensIn}
+              tokensOut={s.tokensOut}
+              cost={s.cost}
+            />
+          )}
           {s?.viewerMode && (
             <>
               <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-medium bg-warning/10 text-warning border border-warning/30">

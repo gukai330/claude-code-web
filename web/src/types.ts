@@ -6,6 +6,25 @@ export const DEFAULT_NODE_ID = 'local';
 export const DEFAULT_AGENT_PROVIDER: AgentProviderId = 'claude';
 export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-8';
 
+/** A breakdown of what is filling the context window, straight from the SDK.
+ *  The app shows this because "should I start a new session?" is otherwise
+ *  guesswork. */
+export type ContextUsageCategory = {
+  name: string;
+  tokens: number;
+  /** SDK-supplied colour, so the breakdown matches what the CLI draws. */
+  color: string;
+};
+
+export type ContextUsage = {
+  categories: ContextUsageCategory[];
+  totalTokens: number;
+  maxTokens: number;
+  /** 0-100, as computed by the SDK rather than by dividing here. */
+  percentage: number;
+  model: string;
+};
+
 export type ActiveToolInfo = {
   toolUseId: string;
   name: string;
@@ -31,6 +50,7 @@ export type SessionStateSnapshot = {
   tokensIn: number;
   tokensOut: number;
   cost?: number;
+  contextUsage?: ContextUsage;
   viewerMode?: boolean;
 };
 
