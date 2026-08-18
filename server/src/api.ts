@@ -14,6 +14,7 @@ import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
 import { getModelCatalog, peekModelCatalog } from './session/modelCatalog.js';
+import { getCommandCatalog, peekCommandCatalog } from './session/commandCatalog.js';
 import { SyncManager, safeRelativePath, type ConflictSide, type SyncClientConfig, type SyncOutcome, type SyncPreference } from './sync/SyncManager.js';
 
 const SKIP_DIRS = new Set([
@@ -102,6 +103,21 @@ export function registerApi(
     } catch (e) {
       // The client keeps a hardcoded fallback list, so a failure here is not fatal.
       return reply.code(503).send({ error: (e as Error).message, models: [] });
+    }
+  });
+
+  // The real slash commands for this project — skills, plugins and project
+  // commands included — rather than the palette's hardcoded UI actions.
+  app.get('/api/commands', async (req, reply) => {
+    const q = req.query as { cwd?: string; refresh?: string } | undefined;
+    const cwd = resolveSafe(q?.cwd ?? defaultCwd);
+    const cachedNow = peekCommandCatalog(cwd);
+    if (cachedNow && q?.refresh !== '1') return { commands: cachedNow, source: 'cache' };
+    try {
+      return { commands: await getCommandCatalog(cwd, q?.refresh === '1'), source: 'sdk' };
+    } catch (e) {
+      // The palette keeps its built-in actions, so this is never fatal.
+      return reply.code(503).send({ error: (e as Error).message, commands: [] });
     }
   });
 

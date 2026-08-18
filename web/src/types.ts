@@ -40,6 +40,15 @@ export type SessionSuggestion = {
  *  so a suggestion keeps its place in the transcript across reconnects. */
 export const SESSION_SUGGESTION_EVENT = 'ccw_session_suggestion';
 
+/** A real slash command reported by the CLI: user and project commands,
+ *  skills, and anything a plugin contributes. */
+export type SlashCommandInfo = {
+  name: string;
+  description: string;
+  argumentHint: string;
+  aliases?: string[];
+};
+
 export type ActiveToolInfo = {
   toolUseId: string;
   name: string;

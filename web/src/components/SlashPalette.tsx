@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AgentProviderId, PermissionMode } from '../types';
+import type { AgentProviderId, PermissionMode, SlashCommandInfo } from '../types';
 import { modelOptionsForProvider } from '../types';
 
 export type SlashAction =
@@ -13,6 +13,9 @@ export type SlashAction =
 type Props = {
   query: string;
   provider?: AgentProviderId;
+  /** Real commands from the CLI. Appended after the built-in UI actions,
+   *  which are the ones this web client implements itself. */
+  commands?: SlashCommandInfo[];
   onPick: (a: SlashAction) => void;
   onClose: () => void;
   onEmptySubmit: () => void;
@@ -20,7 +23,31 @@ type Props = {
 
 type Cmd = { label: string; hint: string; action: SlashAction; match: string[] };
 
-export function SlashPalette({ query, provider, onPick, onClose, onEmptySubmit }: Props) {
+/** Names the web client implements itself; the CLI reports some of the same
+ *  words, and its version would not do what this UI does. */
+const BUILT_IN_NAMES = new Set(['clear', 'cwd', 'history', 'model', 'mode']);
+
+/** Picking one fills the composer rather than sending: a command with an
+ *  argument hint usually still needs the argument. */
+export function toCommandEntries(commands: SlashCommandInfo[] | undefined): Cmd[] {
+  if (!commands) return [];
+  const seen = new Set<string>();
+  const out: Cmd[] = [];
+  for (const c of commands) {
+    const name = c.name?.trim().replace(/^\//, '');
+    if (!name || BUILT_IN_NAMES.has(name) || seen.has(name)) continue;
+    seen.add(name);
+    out.push({
+      label: `/${name}${c.argumentHint ? ` ${c.argumentHint}` : ''}`,
+      hint: c.description ?? '',
+      action: { kind: 'literal', text: `/${name} ` },
+      match: [name, ...(c.aliases ?? []), ...(c.description ?? '').toLowerCase().split(/\s+/).slice(0, 6)],
+    });
+  }
+  return out;
+}
+
+export function SlashPalette({ query, provider, commands, onPick, onClose, onEmptySubmit }: Props) {
   const [i, setI] = useState(0);
 
   const cmds: Cmd[] = [
@@ -37,6 +64,7 @@ export function SlashPalette({ query, provider, onPick, onClose, onEmptySubmit }
     { label: '/mode acceptEdits', hint: 'auto-allow file edits · Bash prompts', action: { kind: 'mode', mode: 'acceptEdits' }, match: ['mode', 'accept', 'edits'] },
     { label: '/mode plan', hint: 'read-only · propose a plan', action: { kind: 'mode', mode: 'plan' }, match: ['mode', 'plan'] },
     { label: '/mode bypass', hint: 'auto-allow EVERYTHING · dangerous', action: { kind: 'mode', mode: 'bypassPermissions' }, match: ['mode', 'bypass', 'yolo', 'dangerous'] },
+    ...toCommandEntries(commands),
   ];
 
   const q = query.toLowerCase();

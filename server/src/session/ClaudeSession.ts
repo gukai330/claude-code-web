@@ -1,6 +1,7 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { createSuggestionServer, SUGGEST_SESSION_TOOL, SUGGESTION_SERVER_NAME } from './sessionSuggestions.js';
 import { SESSION_SUGGESTION_EVENT } from '../protocol.js';
+import { primeCommandsFromQuery } from './commandCatalog.js';
 import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -459,6 +460,7 @@ export class ClaudeSession {
       this.abortCtl = new AbortController();
       this.query = query({ prompt: this.prompts, options: this.buildOptions(this.state.claudeSessionId) });
       primeFromQuery(this.query);
+    primeCommandsFromQuery(this.query, this.cwd);
       // loop continues, awaits the new query
     }
   }
@@ -488,6 +490,7 @@ export class ClaudeSession {
     this.abortCtl = new AbortController();
     this.query = query({ prompt: this.prompts, options: this.buildOptions(resume) });
     primeFromQuery(this.query);
+    primeCommandsFromQuery(this.query, this.cwd);
     void this.pump();
   }
 

@@ -1,5 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AgentProviderId, PermissionMode } from '../types';
+import type { SlashCommandInfo } from '../types';
+import { appUrl } from '../appUrl';
 import { MODE_ORDER, modeHint, modeLabel } from '../types';
 import { SlashPalette, type SlashAction } from './SlashPalette';
 import { MentionPopup } from './MentionPopup';
@@ -193,6 +195,21 @@ function InputBarImpl(p: Props) {
       el.setSelectionRange(c, c);
     });
   };
+
+  // Fetched per project: skills, plugins and project commands differ between
+  // them. A failure is silent -- the palette keeps its built-in actions.
+  const [slashCommands, setSlashCommands] = useState<SlashCommandInfo[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    setSlashCommands([]);
+    fetch(appUrl(`/api/commands?t=${encodeURIComponent(p.token)}&cwd=${encodeURIComponent(p.cwd)}`))
+      .then((r) => (r.ok ? r.json() : { commands: [] }))
+      .then((j: { commands?: SlashCommandInfo[] }) => {
+        if (!cancelled) setSlashCommands(j.commands ?? []);
+      })
+      .catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [p.cwd, p.token]);
 
   const pickSlash = (a: SlashAction) => {
     if (a.kind === 'literal') {
@@ -471,6 +488,7 @@ function InputBarImpl(p: Props) {
           <SlashPalette
             query={slashQuery}
             provider={p.provider}
+            commands={slashCommands}
             onPick={pickSlash}
             onClose={() => setSlashQuery(null)}
             onEmptySubmit={() => {
