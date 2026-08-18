@@ -6,7 +6,7 @@ import { buildReconnectHello } from './reconnect';
 import { createAttachId, isMessageForAttachment, readyUsesExplicitReplay, replayModeForReady, withAttachId, type AttachmentViewState } from './attachment';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { AgentProviderId, ClaudeAuthInfo, ClientHello, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, setClaudeModelOptions, MODE_ORDER, type SyncResult } from './types';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, setClaudeModelOptions, MODE_ORDER, type SyncResult, type SessionSuggestion } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
 import { PermissionModal } from './components/PermissionModal';
@@ -182,6 +182,7 @@ export function App() {
   useEffect(() => {
     document.documentElement.dataset.skin = skin;
   }, [skin]);
+
 
   // Poll the sessions list every 10s while connected. The server no longer
   // broadcasts sessions_update on every state transition (it was pushing ~the
@@ -730,6 +731,16 @@ export function App() {
     }
   }, [commitAttachment, commitState, liveSessions, pushToast]);
 
+  /** A suggestion the user accepted: open a fresh session in the same project
+   *  and send its prompt once that session is actually attached. Sending
+   *  immediately would race the websocket handshake. */
+  const pendingPromptRef = useRef<string | null>(null);
+  const startSuggestion = useCallback((suggestion: SessionSuggestion) => {
+    pendingPromptRef.current = suggestion.prompt;
+    newSession({ cwd: stateRef.current.state?.cwd });
+    pushToast(`Opening a session for "${suggestion.title}"`);
+  }, [newSession, pushToast]);
+
   /** Fork the transcript at one message and open the result. The original is
    *  left exactly as it is — that is the difference between a side chat and a
    *  rewind. */
@@ -763,6 +774,15 @@ export function App() {
     }
     commitState((s) => (s.state ? addUserOptimistic(s, text) : s));
   }, [commitState, pushToast]);
+  // A prompt queued by an accepted suggestion waits here until the session it
+  // was opened for can actually receive it.
+  useEffect(() => {
+    if (attachment.phase !== 'ready') return;
+    const prompt = pendingPromptRef.current;
+    if (!prompt) return;
+    pendingPromptRef.current = null;
+    sendUser(prompt);
+  }, [attachment.phase, sendUser]);
 
   const onAcceptEdit = useCallback((reqId: string) => {
     setPendingEdits((prev) => {
@@ -1109,6 +1129,7 @@ export function App() {
               pendingByToolUseId={pendingByToolUseId}
               secondsSinceLastEvent={secondsSinceLastEvent}
               onBranch={(uuid: string) => void branchFrom(uuid)}
+              onStartSuggestion={startSuggestion}
               activeTool={state.state?.activeTool}
               onAcceptEdit={onAcceptEdit}
               onRejectEdit={onRejectEdit}

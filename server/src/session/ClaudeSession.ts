@@ -1,4 +1,6 @@
 import { query, type Options, type Query, type SDKMessage, type SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { createSuggestionServer, SUGGEST_SESSION_TOOL, SUGGESTION_SERVER_NAME } from './sessionSuggestions.js';
+import { SESSION_SUGGESTION_EVENT } from '../protocol.js';
 import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
@@ -74,6 +76,11 @@ export class ClaudeSession {
   private state: SessionStateSnapshot;
   private prompts = new PromptQueue();
   private query?: Query;
+  /** Built once per session: the handler closes over this instance, so the
+   *  suggestion lands in the right transcript. */
+  private readonly suggestionServer = createSuggestionServer((suggestion) => {
+    this.pushEvent({ type: SESSION_SUGGESTION_EVENT, suggestion } as unknown as SDKMessage);
+  });
   private abortCtl = new AbortController();
   private nextEventId = 1;
   private ring = new ReplayBuffer<SessionEvent>();
@@ -470,6 +477,7 @@ export class ClaudeSession {
       // the CLI subprocess never has to re-initialize when the user toggles
       // between those modes.
       permissionMode: this.state.permissionMode === 'plan' ? 'plan' : 'default',
+      mcpServers: { [SUGGESTION_SERVER_NAME]: this.suggestionServer },
       ...(claudePath ? { pathToClaudeCodeExecutable: claudePath } : {}),
       canUseTool: this.canUseToolImpl,
     };
@@ -550,6 +558,11 @@ export class ClaudeSession {
       } finally {
         this.refreshRuntimeStatus('running');
       }
+    }
+    // Suggesting a session touches nothing: it renders a card, and the user
+    // decides. Prompting for it would train them to dismiss prompts.
+    if (toolName === SUGGEST_SESSION_TOOL) {
+      return { behavior: 'allow', updatedInput: input };
     }
     // "bypass" is implemented here, not at the SDK level — avoids the CLI
     // subprocess exiting with "bypass_permissions_disabled" on toggle.

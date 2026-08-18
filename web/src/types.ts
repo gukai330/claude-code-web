@@ -25,6 +25,21 @@ export type ContextUsage = {
   model: string;
 };
 
+/** Work Claude noticed that does not belong in the current conversation. It
+ *  becomes a card; nothing is started unless the user clicks it. */
+export type SessionSuggestion = {
+  id: string;
+  title: string;
+  /** Self-contained opening message for the new session. */
+  prompt: string;
+  reason: string;
+  createdAt: number;
+};
+
+/** Carried as a synthetic event in the replay ring rather than a side channel,
+ *  so a suggestion keeps its place in the transcript across reconnects. */
+export const SESSION_SUGGESTION_EVENT = 'ccw_session_suggestion';
+
 export type ActiveToolInfo = {
   toolUseId: string;
   name: string;
@@ -245,7 +260,8 @@ export type ChatItem =
   | { kind: 'assistant_text'; id: string; text: string; streamed?: boolean; uuid?: string }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tool_use'; id: string; toolUseId: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
-  | { kind: 'system'; id: string; text: string; level: 'info' | 'error' };
+  | { kind: 'system'; id: string; text: string; level: 'info' | 'error' }
+  | { kind: 'suggestion'; id: string; suggestion: SessionSuggestion };
 
 export type StoredSession = {
   sessionId: string;

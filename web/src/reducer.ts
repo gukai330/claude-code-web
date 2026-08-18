@@ -1,4 +1,5 @@
-import type { ChatItem, PermissionMode, SdkEvent, SessionStateSnapshot } from './types';
+import type { ChatItem, PermissionMode, SdkEvent, SessionStateSnapshot, SessionSuggestion } from './types';
+import { SESSION_SUGGESTION_EVENT } from './types';
 import { cleanAssistantText } from './assistantText';
 
 export type ChatState = {
@@ -76,6 +77,21 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
   }
 
   const items = s.items.slice();
+
+  // Not an SDK message: the server injects this when Claude calls the
+  // suggest_session tool, so the card keeps its place in the transcript.
+  if (ev.type === SESSION_SUGGESTION_EVENT) {
+    const suggestion = (ev as unknown as { suggestion?: SessionSuggestion }).suggestion;
+    if (!suggestion?.id) return { ...s, lastEventId: Math.max(s.lastEventId, eventId) };
+    if (s.items.some((i) => i.kind === 'suggestion' && i.suggestion.id === suggestion.id)) {
+      return { ...s, lastEventId: Math.max(s.lastEventId, eventId) };
+    }
+    return {
+      ...s,
+      items: [...s.items, { kind: 'suggestion', id: rid(), suggestion }],
+      lastEventId: Math.max(s.lastEventId, eventId),
+    };
+  }
 
   if (ev.type === 'assistant' && ev.message?.content) {
     const streamedText = streamingText;

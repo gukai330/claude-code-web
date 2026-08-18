@@ -285,6 +285,8 @@ function estimateChatItemBytes(item: ChatState['items'][number]): number {
   let chars = 96;
   if (item.kind === 'user' || item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'system') {
     chars += item.text.length;
+  } else if (item.kind === 'suggestion') {
+    chars += item.suggestion.title.length + item.suggestion.prompt.length + item.suggestion.reason.length;
   } else {
     chars += item.name.length + JSON.stringify(item.input).length + (item.result?.content.length ?? 0);
   }

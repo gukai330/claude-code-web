@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ActiveToolInfo, ChatItem } from '../types';
+import type { ActiveToolInfo, ChatItem, SessionSuggestion } from '../types';
+import { Icon } from './Icon';
 import type { SkinId } from '../skins';
 import { ToolUse } from './ToolUse';
 import { DiffBlock } from './DiffBlock';
@@ -29,9 +30,11 @@ type Props = {
   onStop: () => void;
   /** Start a side chat sliced at this message. */
   onBranch?: (uuid: string) => void;
+  /** Turn one of Claude's suggestions into its own session. */
+  onStartSuggestion?: (suggestion: SessionSuggestion) => void;
 };
 
-function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop, onBranch }: Props) {
+function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop, onBranch, onStartSuggestion }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -117,6 +120,7 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
             onAcceptEdit={onAcceptEdit}
             onRejectEdit={onRejectEdit}
             onBranch={onBranch}
+            onStartSuggestion={onStartSuggestion}
           />
         ))}
         {streamingText && busy && (
@@ -140,7 +144,7 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
 
 export const MessageList = memo(MessageListImpl);
 
-type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit' | 'onBranch'>;
+type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit' | 'onBranch' | 'onStartSuggestion'>;
 
 /**
  * Start a side chat from this point. Only offered where the transcript id is
@@ -161,7 +165,7 @@ function BranchButton({ uuid, onBranch }: { uuid?: string; onBranch?: (uuid: str
   );
 }
 
-const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit, onBranch }: BubbleProps) {
+const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit, onBranch, onStartSuggestion }: BubbleProps) {
   const content = contentForSkin(skin);
   if (item.kind === 'user') {
     return (
@@ -205,10 +209,58 @@ const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId
     }
     return <div className="animate-fade-up"><ToolUse item={item} defaultOpen={!!item.result?.isError} /></div>;
   }
+  if (item.kind === 'suggestion') {
+    return <SuggestionCard suggestion={item.suggestion} onStart={onStartSuggestion} />;
+  }
   return (
     <div className={`animate-fade-up text-xs px-3 py-2 rounded-sm ${item.level === 'error' ? 'bg-danger/10 text-danger' : 'bg-bg-raised/60 text-text-muted'}`}>{item.text}</div>
   );
 });
+
+/**
+ * Work Claude noticed that does not belong in this conversation. Claude raises
+ * it; nothing happens until the user says so — the point is to keep the current
+ * turn from sprawling, not to start a second one behind their back.
+ */
+function SuggestionCard({
+  suggestion,
+  onStart,
+}: {
+  suggestion: SessionSuggestion;
+  onStart?: (suggestion: SessionSuggestion) => void;
+}) {
+  const [dismissed, setDismissed] = useState(false);
+  if (dismissed) return null;
+  return (
+    <div className="animate-fade-up rounded-md border border-accent/25 bg-bg-accent-soft/40 p-3">
+      <div className="flex items-start gap-2">
+        <Icon name="sparkles" size={14} className="mt-0.5 shrink-0 text-accent" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px] font-medium text-text-primary">{suggestion.title}</div>
+          <div className="mt-0.5 text-[11px] text-text-secondary">{suggestion.reason}</div>
+        </div>
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        {onStart && (
+          <button
+            type="button"
+            onClick={() => onStart(suggestion)}
+            className="h-7 rounded-sm bg-accent px-2.5 text-[11px] font-medium text-text-inverse hover:bg-accent-hi transition-colors duration-hover"
+          >
+            Start a session for this
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          className="h-7 rounded-sm px-2 text-[11px] text-text-muted hover:bg-bg-hover hover:text-text-primary transition-colors duration-hover"
+        >
+          Not now
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function ThinkingState({ skin, secondsSinceLastEvent, activeTool, onStop }: { skin: SkinId; secondsSinceLastEvent: number; activeTool?: ActiveToolInfo; onStop: () => void }) {
   const content = contentForSkin(skin);
