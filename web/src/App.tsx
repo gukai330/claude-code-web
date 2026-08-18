@@ -730,6 +730,31 @@ export function App() {
     }
   }, [commitAttachment, commitState, liveSessions, pushToast]);
 
+  /** Fork the transcript at one message and open the result. The original is
+   *  left exactly as it is — that is the difference between a side chat and a
+   *  rewind. */
+  const branchFrom = useCallback(async (uuid: string) => {
+    const claudeSessionId = stateRef.current.state?.claudeSessionId ?? stateRef.current.state?.providerSessionId;
+    const cwd = stateRef.current.state?.cwd;
+    if (!claudeSessionId) {
+      pushToast('This chat has no transcript yet — send a message first.', { level: 'error' });
+      return;
+    }
+    try {
+      const r = await fetch(appUrl(`/api/session/fork?t=${encodeURIComponent(token ?? '')}`), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ claudeSessionId, cwd, upToMessageId: uuid }),
+      });
+      const body = (await r.json()) as { sessionId?: string; error?: string };
+      if (!r.ok || !body.sessionId) throw new Error(body.error ?? r.statusText);
+      newSession({ cwd, resumeClaudeId: body.sessionId });
+      pushToast('Side chat opened — the original is untouched.');
+    } catch (e) {
+      pushToast(`Could not branch: ${(e as Error).message}`, { level: 'error' });
+    }
+  }, [newSession, pushToast, token]);
+
   const sendUser = useCallback((text: string) => {
     if (!text.trim()) return;
     if (!wsRef.current?.send({ type: 'user', text })) {
@@ -1083,6 +1108,7 @@ export function App() {
               streamingText={state.streamingText}
               pendingByToolUseId={pendingByToolUseId}
               secondsSinceLastEvent={secondsSinceLastEvent}
+              onBranch={(uuid: string) => void branchFrom(uuid)}
               activeTool={state.state?.activeTool}
               onAcceptEdit={onAcceptEdit}
               onRejectEdit={onRejectEdit}

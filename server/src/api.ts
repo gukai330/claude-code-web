@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import fastifyMultipart, { type MultipartFile } from '@fastify/multipart';
-import { listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
+import { forkSession, listSessions, renameSession } from '@anthropic-ai/claude-agent-sdk';
 import { createReadStream } from 'node:fs';
 import { mkdir, open, readdir, stat, unlink, writeFile, type FileHandle } from 'node:fs/promises';
 import { basename, extname, join, relative, resolve, isAbsolute, sep } from 'node:path';
@@ -273,6 +273,27 @@ export function registerApi(
     try {
       await renameSession(body.claudeSessionId, body.title, body.cwd ? { dir: body.cwd } : undefined);
       return { ok: true };
+    } catch (e) {
+      return reply.code(400).send({ error: (e as Error).message });
+    }
+  });
+
+  // Branch a conversation. `upToMessageId` slices the transcript there, so the
+  // side chat inherits everything up to that point and nothing after it; the
+  // original is untouched, which is the whole point of forking rather than
+  // rewinding.
+  app.post('/api/session/fork', async (req, reply) => {
+    const body = req.body as
+      | { claudeSessionId?: string; cwd?: string; upToMessageId?: string; title?: string }
+      | undefined;
+    if (!body?.claudeSessionId) return reply.code(400).send({ error: 'claudeSessionId required' });
+    try {
+      const forked = await forkSession(body.claudeSessionId, {
+        ...(body.cwd ? { dir: resolveSafe(body.cwd) } : {}),
+        ...(body.upToMessageId ? { upToMessageId: body.upToMessageId } : {}),
+        ...(body.title ? { title: body.title } : {}),
+      });
+      return { sessionId: forked.sessionId };
     } catch (e) {
       return reply.code(400).send({ error: (e as Error).message });
     }

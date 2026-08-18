@@ -40,13 +40,14 @@ function extractUserText(content: unknown): string | null {
  * with the same text — if so, "confirm" it instead of appending a duplicate.
  * Searches the tail of items for resilience (last 5 are usually enough).
  */
-function absorbOptimistic(items: ChatItem[], text: string): ChatItem[] | null {
+function absorbOptimistic(items: ChatItem[], text: string, uuid?: string): ChatItem[] | null {
   const scan = Math.min(5, items.length);
   for (let i = items.length - 1; i >= items.length - scan && i >= 0; i--) {
     const it = items[i];
     if (it.kind === 'user' && it.optimistic && it.text === text) {
       const copy = items.slice();
-      copy[i] = { ...it, optimistic: false };
+      // Confirming the echo is also where the optimistic item learns its id.
+      copy[i] = { ...it, optimistic: false, uuid };
       return copy;
     }
   }
@@ -55,6 +56,10 @@ function absorbOptimistic(items: ChatItem[], text: string): ChatItem[] | null {
 
 export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatState {
   if (eventId > 0 && eventId <= s.lastEventId) return s;
+  // The transcript's own id for this message. Forking slices on it, so it has
+  // to survive the trip from SDK event to chat item.
+  const rawUuid = (ev as unknown as { uuid?: unknown }).uuid;
+  const uuid = typeof rawUuid === 'string' ? rawUuid : undefined;
   let busy = s.busy;
   let streamingText = s.streamingText;
 
@@ -80,7 +85,7 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
       if (part.type === 'text' && typeof (part as any).text === 'string') {
         const text = cleanAssistantText((part as any).text);
         if (!text) continue;
-        items.push({ kind: 'assistant_text', id: rid(), text, streamed: isStreamHandoff(cleanAssistantText(streamedText), text) });
+        items.push({ kind: 'assistant_text', id: rid(), text, streamed: isStreamHandoff(cleanAssistantText(streamedText), text), uuid });
       } else if (part.type === 'thinking' && typeof (part as any).thinking === 'string') {
         items.push({ kind: 'thinking', id: rid(), text: (part as any).thinking });
       } else if (part.type === 'tool_use') {
@@ -94,11 +99,11 @@ export function applyEvent(s: ChatState, ev: SdkEvent, eventId: number): ChatSta
     //    either absorb the matching optimistic item or append a new one.
     const text = extractUserText(content);
     if (text) {
-      const absorbed = absorbOptimistic(items, text);
+      const absorbed = absorbOptimistic(items, text, uuid);
       if (absorbed) {
         return { ...s, items: absorbed, busy, streamingText, lastEventId: Math.max(s.lastEventId, eventId) };
       }
-      items.push({ kind: 'user', id: rid(), text });
+      items.push({ kind: 'user', id: rid(), text, uuid });
     }
     // 2) Then walk for tool_result parts and bind them back to their tool_use.
     if (Array.isArray(content)) {

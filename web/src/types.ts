@@ -238,8 +238,11 @@ export type SdkEvent = {
 };
 
 export type ChatItem =
-  | { kind: 'user'; id: string; text: string; optimistic?: boolean }
-  | { kind: 'assistant_text'; id: string; text: string; streamed?: boolean }
+  // `uuid` is the transcript's own message id, carried through so a branch can
+  // be sliced at exactly this message. Absent on optimistic and replayed-only
+  // items, which simply cannot be branched from.
+  | { kind: 'user'; id: string; text: string; optimistic?: boolean; uuid?: string }
+  | { kind: 'assistant_text'; id: string; text: string; streamed?: boolean; uuid?: string }
   | { kind: 'thinking'; id: string; text: string }
   | { kind: 'tool_use'; id: string; toolUseId: string; name: string; input: Record<string, unknown>; result?: { content: string; isError: boolean } }
   | { kind: 'system'; id: string; text: string; level: 'info' | 'error' };

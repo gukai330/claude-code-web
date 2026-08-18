@@ -27,9 +27,11 @@ type Props = {
   onAcceptEdit: (reqId: string) => void;
   onRejectEdit: (reqId: string) => void;
   onStop: () => void;
+  /** Start a side chat sliced at this message. */
+  onBranch?: (uuid: string) => void;
 };
 
-function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop }: Props) {
+function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items, busy, streamingText, pendingByToolUseId, secondsSinceLastEvent, activeTool, onAcceptEdit, onRejectEdit, onStop, onBranch }: Props) {
   const scrollerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -114,6 +116,7 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
             pendingByToolUseId={pendingByToolUseId}
             onAcceptEdit={onAcceptEdit}
             onRejectEdit={onRejectEdit}
+            onBranch={onBranch}
           />
         ))}
         {streamingText && busy && (
@@ -137,13 +140,33 @@ function MessageListImpl({ sessionKey, scrollPositions, token, cwd, skin, items,
 
 export const MessageList = memo(MessageListImpl);
 
-type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit'>;
+type BubbleProps = { item: ChatItem } & Pick<Props, 'token' | 'cwd' | 'skin' | 'pendingByToolUseId' | 'onAcceptEdit' | 'onRejectEdit' | 'onBranch'>;
 
-const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit }: BubbleProps) {
+/**
+ * Start a side chat from this point. Only offered where the transcript id is
+ * known: an optimistic echo has no id yet, and slicing needs one.
+ */
+function BranchButton({ uuid, onBranch }: { uuid?: string; onBranch?: (uuid: string) => void }) {
+  if (!uuid || !onBranch) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onBranch(uuid)}
+      title="Start a side chat from here — this conversation is left as it is"
+      aria-label="Start a side chat from this message"
+      className="mt-1 shrink-0 rounded-sm px-1.5 py-0.5 text-[10px] text-text-muted opacity-0 transition-opacity duration-hover hover:bg-bg-hover hover:text-text-primary focus:opacity-100 group-hover:opacity-100"
+    >
+      Branch
+    </button>
+  );
+}
+
+const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId, onAcceptEdit, onRejectEdit, onBranch }: BubbleProps) {
   const content = contentForSkin(skin);
   if (item.kind === 'user') {
     return (
-      <div className={`skin-message-row skin-message-user ${content.decor.messageClass} animate-fade-up flex justify-end ${item.optimistic ? 'opacity-85' : ''}`}>
+      <div className={`group skin-message-row skin-message-user ${content.decor.messageClass} animate-fade-up flex items-start justify-end gap-1 ${item.optimistic ? 'opacity-85' : ''}`}>
+        <BranchButton uuid={item.uuid} onBranch={onBranch} />
         <div className="skin-message-bubble skin-user-bubble max-w-[80%] px-4 py-2.5 text-text-primary whitespace-pre-wrap bg-bg-accent-soft border border-accent/15 rounded-[14px_14px_4px_14px]">
           {item.text}
         </div>
@@ -153,9 +176,14 @@ const Bubble = memo(function Bubble({ item, token, cwd, skin, pendingByToolUseId
   }
   if (item.kind === 'assistant_text') {
     return (
-      <AssistantShell skin={skin} animated={!item.streamed}>
-        <MarkdownMessage text={item.text} token={token} cwd={cwd} />
-      </AssistantShell>
+      <div className="group relative">
+        <AssistantShell skin={skin} animated={!item.streamed}>
+          <MarkdownMessage text={item.text} token={token} cwd={cwd} />
+        </AssistantShell>
+        <div className="absolute right-0 top-0">
+          <BranchButton uuid={item.uuid} onBranch={onBranch} />
+        </div>
+      </div>
     );
   }
   if (item.kind === 'thinking') {
