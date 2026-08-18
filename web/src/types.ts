@@ -162,12 +162,35 @@ export type StoredSession = {
 };
 
 // Models exposed in the UI. Labels are stable display names; ids map to SDK model strings.
-export const MODEL_OPTIONS = [
-  { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 4.8', hint: 'best for agentic coding' },
+export type ModelOption = { id: string; label: string; hint: string };
+
+// Fallback only. The live list is fetched from /api/models, which asks the SDK
+// what the installed Claude Code CLI actually supports for this account. This
+// array is what the UI shows before that resolves, or if it fails.
+export const FALLBACK_MODEL_OPTIONS: readonly ModelOption[] = [
+  // NOTE: the first entry must be DEFAULT_CLAUDE_MODEL -- provider-ui.test.ts
+  // asserts the picker leads with the default. Change both together.
+  { id: DEFAULT_CLAUDE_MODEL, label: 'Opus 4.8', hint: 'default' },
+  { id: 'claude-opus-5', label: 'Opus 5', hint: 'best for agentic coding' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', hint: 'balanced' },
   { id: 'claude-fable-5', label: 'Fable 5', hint: 'long-horizon flagship' },
-  { id: 'claude-sonnet-4-6', label: 'Sonnet 4.6', hint: 'balanced' },
   { id: 'claude-haiku-4-5', label: 'Haiku 4.5', hint: 'fastest' },
-] as const;
+];
+
+let claudeModelOptions: readonly ModelOption[] = FALLBACK_MODEL_OPTIONS;
+
+/** Swap in the SDK-reported list. Ignored if empty so we never blank the picker. */
+export function setClaudeModelOptions(
+  models: Array<{ value?: string; displayName?: string; description?: string }>
+): boolean {
+  const mapped = models
+    .filter((m): m is { value: string; displayName?: string; description?: string } =>
+      typeof m.value === 'string' && m.value.length > 0)
+    .map((m) => ({ id: m.value, label: m.displayName || m.value, hint: m.description || '' }));
+  if (mapped.length === 0) return false;
+  claudeModelOptions = mapped;
+  return true;
+}
 
 export const CODEX_MODEL_OPTIONS = [
   { id: 'gpt-5.5', label: 'GPT-5.5', hint: 'frontier coding' },
@@ -177,7 +200,7 @@ export const CODEX_MODEL_OPTIONS = [
 ] as const;
 
 export function modelOptionsForProvider(provider: AgentProviderId | undefined) {
-  return provider === 'codex' ? CODEX_MODEL_OPTIONS : MODEL_OPTIONS;
+  return provider === 'codex' ? CODEX_MODEL_OPTIONS : claudeModelOptions;
 }
 
 export function defaultModelForProvider(provider: AgentProviderId | undefined): string | undefined {

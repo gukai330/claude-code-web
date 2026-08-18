@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { PermissionBroker } from '../permissions/PermissionBroker.js';
 import { PlanBroker } from '../permissions/PlanBroker.js';
 import { resolveClaudePath } from './resolveClaudePath.js';
+import { primeFromQuery } from './modelCatalog.js';
 import { streamClaudeTranscriptMessages } from './claudeTranscript.js';
 import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, type AgentProviderId, type PendingControl, type PermissionMode, type SessionRuntimeStatus, type SessionStateSnapshot } from '../protocol.js';
 import { ReplayBuffer, boundReplayValue, type HistoryLoadMetadata } from './ReplayBuffer.js';
@@ -445,6 +446,7 @@ export class ClaudeSession {
 
       this.abortCtl = new AbortController();
       this.query = query({ prompt: this.prompts, options: this.buildOptions(this.state.claudeSessionId) });
+      primeFromQuery(this.query);
       // loop continues, awaits the new query
     }
   }
@@ -472,6 +474,7 @@ export class ClaudeSession {
     if (this.query || this.closed || this.viewerMode) return;
     this.abortCtl = new AbortController();
     this.query = query({ prompt: this.prompts, options: this.buildOptions(resume) });
+    primeFromQuery(this.query);
     void this.pump();
   }
 

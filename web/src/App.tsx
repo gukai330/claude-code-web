@@ -6,7 +6,7 @@ import { buildReconnectHello } from './reconnect';
 import { createAttachId, isMessageForAttachment, readyUsesExplicitReplay, replayModeForReady, withAttachId, type AttachmentViewState } from './attachment';
 import { deriveActivitySessions, deriveActivitySummary } from './activity';
 import type { AgentProviderId, ClaudeAuthInfo, ClientHello, NodeInfo, PermissionMode, SdkEvent, ServerInfo, ServerMessage, ServerPermissionRequest, ServerPlanProposed, SessionStateSnapshot, StoredSession } from './types';
-import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, MODE_ORDER } from './types';
+import { DEFAULT_AGENT_PROVIDER, DEFAULT_NODE_ID, defaultModelForProvider, modeLabel, setClaudeModelOptions, MODE_ORDER } from './types';
 import { Sidebar } from './components/Sidebar';
 import { MessageList } from './components/MessageList';
 import { PermissionModal } from './components/PermissionModal';
@@ -300,6 +300,25 @@ export function App() {
       .catch(() => {})
       .finally(() => setNodesLoaded(true));
   }, [authed, selectNodeSilently, selectProviderSilently, token]);
+
+  // The model picker is populated from the SDK (whatever the installed Claude
+  // Code CLI reports), falling back to FALLBACK_MODEL_OPTIONS if this fails.
+  // Bumping state is what makes the menus re-read the module-level store.
+  const [, setModelsRev] = useState(0);
+  useEffect(() => {
+    if (!authed || !token) return;
+    let cancelled = false;
+    fetch(appUrl(`/api/models?t=${encodeURIComponent(token)}`))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => {
+        if (cancelled) return;
+        if (setClaudeModelOptions((j.models ?? []) as Array<{ value?: string }>)) {
+          setModelsRev((n) => n + 1);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [authed, token]);
 
   useEffect(() => {
     if (!authed || !token) return;

@@ -13,6 +13,7 @@ import type { SessionManager } from './session/SessionManager.js';
 import { detectClaudeExecutable } from './session/resolveClaudePath.js';
 import { detectCodexExecutable } from './agents/resolveCodexPath.js';
 import { NodeRegistry } from './nodes/NodeRegistry.js';
+import { getModelCatalog, peekModelCatalog } from './session/modelCatalog.js';
 
 const SKIP_DIRS = new Set([
   'node_modules', '.git', 'dist', 'build', '.next', '.nuxt', '.venv', 'venv',
@@ -86,6 +87,21 @@ export function registerApi(
       node: process.version,
     },
   }));
+
+  // Model list comes from the installed Claude Code CLI via the SDK rather
+  // than a hardcoded array, so it stays correct as new models ship.
+  app.get('/api/models', async (req, reply) => {
+    const q = req.query as { cwd?: string; refresh?: string } | undefined;
+    const cachedNow = peekModelCatalog();
+    if (cachedNow && q?.refresh !== '1') return { models: cachedNow, source: 'cache' };
+    try {
+      const models = await getModelCatalog(resolveSafe(q?.cwd ?? defaultCwd), q?.refresh === '1');
+      return { models, source: 'sdk' };
+    } catch (e) {
+      // The client keeps a hardcoded fallback list, so a failure here is not fatal.
+      return reply.code(503).send({ error: (e as Error).message, models: [] });
+    }
+  });
 
   app.get('/api/nodes', async () => ({ nodes: nodes.list() }));
 
