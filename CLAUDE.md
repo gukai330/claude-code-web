@@ -91,6 +91,42 @@ remote**.
 - `resolveSafe()` in `api.ts` is a misnomer: it normalises paths and does no
   containment at all. Easy to misread when adding new endpoints.
 
+## Closer to the Claude app
+
+Everything below came from asking the SDK for things the fork was doing
+without, or not doing at all. All of it is on `feat/project-sync`, uncommitted
+to any remote.
+
+- **Side chats.** `forkSession(id, {upToMessageId})` branches a transcript at
+  one message; the original is untouched, which is the difference from a
+  rewind. Slicing needs the transcript's own message id, so `uuid` now survives
+  from SDK event to `ChatItem` — including at the moment an optimistic echo is
+  confirmed. An item without one does not offer the affordance.
+- **Session suggestions.** An in-process MCP tool (`createSdkMcpServer`, so no
+  subprocess) that Claude calls to flag work belonging in its own session. It
+  renders as a card; nothing starts unless the user clicks. Auto-allowed in
+  `canUseTool` — suggesting touches nothing, and prompting for it would train
+  people to dismiss prompts. Carried as a **synthetic event in the replay ring**
+  (`ccw_session_suggestion`) rather than a side channel, so a card keeps its
+  place in the transcript across a reconnect.
+- **Context usage.** `getContextUsage()` per category, refreshed once per turn
+  end — it is a control request, so it costs a round trip, and that is the one
+  moment the number has changed and stopped moving. Tokens and cost were
+  already on the snapshot and simply never shown.
+- **Real slash commands.** `supportedCommands()` replaces a hardcoded list of
+  five UI actions. Cached **per cwd**, unlike the model list: commands come
+  from project settings and plugins, so two projects legitimately disagree.
+  The five names this client implements itself are filtered out.
+- **Subagent transcripts.** `listSubagents` / `getSubagentMessages` on a Task
+  card. Listed, not matched: the SDK does not say which Task call produced
+  which subagent id, and a guessed pairing would be worse than an honest list.
+  Not yet exercised against a real Task run.
+- **Background + MCP.** `backgroundTasks(toolUseId)` is the SDK's Ctrl+B, on a
+  running tool card. `mcpServerStatus()` drives a chip that is quiet when
+  everything is connected and loud when something failed. Neither is on
+  `AgentSession`, so neither forces `CodexSession` to implement an SDK-specific
+  control request — both are reached by a duck-typed check.
+
 ## Environment gotchas
 
 - **UI components cannot be render-tested if they draw an `<Icon>`.**
