@@ -26,6 +26,12 @@ const MAX_UPLOAD_TOTAL_BYTES = 50 * 1024 * 1024;
 const UPLOAD_BODY_LIMIT = 80 * 1024 * 1024;
 const FILE_SEARCH_TIME_BUDGET_MS = 200;
 const FILE_SEARCH_ENTRY_BUDGET = 20_000;
+// Never served over /api/file regardless of project root: credential and key
+// material that no editor view legitimately needs.
+const PROTECTED_HOME_DIRS = new Set([
+  '.ssh', '.claude', '.claudecode-web', '.aws', '.gnupg', '.docker', '.kube',
+]);
+
 const DOWNLOADABLE_OUTSIDE_PROJECT_EXTENSIONS = new Set([
   '.csv', '.doc', '.docx', '.gif', '.html', '.jpeg', '.jpg', '.json', '.log', '.md',
   '.pdf', '.png', '.ppt', '.pptx', '.svg', '.txt', '.webp', '.xls', '.xlsx', '.zip',
@@ -275,6 +281,25 @@ function resolveProjectFile(cwd: string, filePath: string, defaultCwd: string): 
     : isAbsolute(raw)
       ? resolve(raw)
       : resolve(root, raw);
+  // `cwd` is caller-supplied. A root like '/' would make every absolute path
+  // count as in-project and skip both checks below, so the root itself must
+  // sit inside a server-defined boundary.
+  const allowedRoots = [resolveSafe(defaultCwd), homedir()]
+    .map((p) => resolve(p))
+    .filter((p, i, arr) => arr.indexOf(p) === i);
+  if (!allowedRoots.some((allowedRoot) => isPathInside(allowedRoot, root))) {
+    throw new Error('Invalid project directory');
+  }
+
+  // Credential material stays unreadable even when it is inside the project.
+  const fromHome = relative(homedir(), target);
+  if (fromHome && !fromHome.startsWith('..') && !isAbsolute(fromHome)) {
+    const top = fromHome.split(/[\/]/)[0];
+    if (PROTECTED_HOME_DIRS.has(top)) {
+      throw new Error('File is in a protected directory');
+    }
+  }
+
   const rel = relative(root, target);
   if (rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)) {
     return target;
