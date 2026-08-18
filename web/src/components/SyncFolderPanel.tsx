@@ -245,13 +245,15 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
             </div>
           ) : (
             <>
-              <div className="mt-3 grid grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_84px] gap-2">
-                <Field label="User on your computer" value={form.user} placeholder="gukai" onChange={(user) => setForm((f) => ({ ...f, user }))} />
-                <Field label="Its address" value={form.host} placeholder="192.168.0.30 or localhost" onChange={(host) => setForm((f) => ({ ...f, host }))} />
-                <Field label="SSH port" value={form.port} placeholder="22" onChange={(port) => setForm((f) => ({ ...f, port }))} />
+              <div className="mt-3 grid grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_84px] gap-2">
+                <Field label="Address of your computer" value={form.host} placeholder="192.168.0.30, or an ssh alias" onChange={(host) => setForm((f) => ({ ...f, host }))} />
+                <Field label="User (optional)" value={form.user} placeholder="same as here" onChange={(user) => setForm((f) => ({ ...f, user }))} />
+                <Field label="Port (opt.)" value={form.port} placeholder="22" onChange={(port) => setForm((f) => ({ ...f, port }))} />
               </div>
               <div className="mt-1 text-[10px] text-text-muted">
-                Shared by every synced project — changing it here changes it for all of them.
+                Only the address is required — blank user and port mean ssh's own defaults. An
+                alias from the server's <code className="font-mono">~/.ssh/config</code> works here
+                and brings its user, port and key with it. Shared by every synced project.
               </div>
             </>
           )}
