@@ -68,6 +68,50 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
 
   useEffect(() => { void load(); }, [load]);
 
+  /** Persist just the connection. Separated from save() because browsing needs
+   *  it to exist, and the folder is exactly what browsing is for — requiring
+   *  both at once made the two mutually blocking. */
+  const saveClient = async (): Promise<SyncStatus | null> => {
+    const host = form.host.trim();
+    if (!host) throw new Error('The address of this computer is required');
+    const port = form.port.trim() ? Number(form.port.trim()) : undefined;
+    if (port !== undefined && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      throw new Error('Port must be a number between 1 and 65535');
+    }
+    const client: SyncClientConfig = {
+      host,
+      ...(form.user.trim() ? { user: form.user.trim() } : {}),
+      ...(port !== undefined ? { port } : {}),
+    };
+    const r = await fetch(appUrl(`/api/sync/client?t=${encodeURIComponent(token)}`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ client }),
+    });
+    if (!r.ok) throw new Error(await readError(r));
+    // Re-read so `status.client` reflects what was stored, which is what the
+    // collapsed summary and the browse gate both key off.
+    const fresh = await fetch(
+      appUrl(`/api/sync?t=${encodeURIComponent(token)}&cwd=${encodeURIComponent(cwd)}`)
+    );
+    if (!fresh.ok) return null;
+    const next = (await fresh.json()) as SyncStatus;
+    setStatus(next);
+    setEditingClient(false);
+    return next;
+  };
+
+  /** Browsing implies the connection is settled, so commit it on the way in. */
+  const openBrowser = async () => {
+    setError(null);
+    try {
+      if (!status?.client || editingClient) await saveClient();
+      setBrowsing(true);
+    } catch (e) {
+      setError(String((e as Error).message || e));
+    }
+  };
+
   const save = async () => {
     setSaving(true);
     setError(null);
@@ -84,19 +128,7 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
       // Written only when it is new or being changed. Re-posting an unchanged
       // shared value on every project save is how one project's form ends up
       // quietly rewriting another's connection.
-      if (!status?.client || editingClient) {
-        const client: SyncClientConfig = {
-          host,
-          ...(form.user.trim() ? { user: form.user.trim() } : {}),
-          ...(port !== undefined ? { port } : {}),
-        };
-        const clientRes = await fetch(appUrl(`/api/sync/client?t=${encodeURIComponent(token)}`), {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ client }),
-        });
-        if (!clientRes.ok) throw new Error(await readError(clientRes));
-      }
+      if (!status?.client || editingClient) await saveClient();
 
       const projectRes = await fetch(appUrl(`/api/sync/project?t=${encodeURIComponent(token)}`), {
         method: 'POST',
@@ -236,17 +268,17 @@ export function SyncFolderPanel({ token, cwd, onClose }: Props) {
               </div>
               <button
                 type="button"
-                disabled={!connectionKnown}
-                onClick={() => setBrowsing((v) => !v)}
-                // Browsing needs the connection: the server reaches the other
-                // machine over the same ssh it will sync with.
-                title={connectionKnown ? 'Browse folders on your computer' : 'Set the connection first'}
+                disabled={!form.host.trim()}
+                onClick={() => (browsing ? setBrowsing(false) : void openBrowser())}
+                // Browsing goes over the same ssh the sync will use, so an
+                // address is the only prerequisite — and clicking saves it.
+                title={form.host.trim() ? 'Browse folders on your computer' : 'Enter the address above first'}
                 className="h-[26px] shrink-0 rounded-sm border border-border-subtle px-2 text-[11px] text-text-secondary hover:border-border hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 transition-colors duration-hover"
               >
                 {browsing ? 'Close' : 'Browse…'}
               </button>
             </div>
-            {browsing && connectionKnown && (
+            {browsing && (
               <ClientFolderPicker
                 token={token}
                 initialPath={form.localPath}
