@@ -463,6 +463,15 @@ export function registerApi(
     return { path: result.path };
   });
 
+  // Browse the client machine. Only possible once the connection exists, which
+  // is why that part is still typed and this part is not.
+  app.get('/api/sync/client-dirs', async (req, reply) => {
+    const q = req.query as { path?: string } | undefined;
+    const result = await sync.listClientDirs(q?.path);
+    if (!result.ok) return reply.code(400).send({ error: result.error });
+    return { path: result.path, parent: result.parent, dirs: result.dirs };
+  });
+
   // How the server reaches the client, shared by every project. Reverse
   // tunnel or direct LAN address only changes these values.
   app.post('/api/sync/client', async (req, reply) => {

@@ -145,6 +145,8 @@ export class SyncManager {
   private readonly unisonCommand: string[];
   private unisonInfo: UnisonInfo | undefined;
   private unisonProbedAt = 0;
+  /** host → which shell answers there. Probing costs an ssh round trip. */
+  private readonly clientShells = new Map<string, 'posix' | 'windows'>();
   private readonly lastResults = new Map<string, SyncResult>();
   private readonly running = new Set<string>();
   /** Per-root tail of the queue. Two syncs of the same tree must never
@@ -329,6 +331,69 @@ export class SyncManager {
     } catch (e) {
       return { ok: false, error: (e as Error).message };
     }
+  }
+
+  /** List directories on the client machine, so the folder can be picked
+   *  rather than typed. Needs only the shared connection — not a project
+   *  entry — because it is used while setting the first one up. */
+  async listClientDirs(
+    path?: string
+  ): Promise<
+    | { ok: true; path: string; parent: string | null; dirs: string[] }
+    | { ok: false; error: string }
+  > {
+    const { client, fileError } = await this.loadConfig();
+    if (fileError) return { ok: false, error: fileError };
+    if (!client) return { ok: false, error: 'No client connection configured yet' };
+
+    const target = (path ?? '').trim();
+    try {
+      const shell = await this.clientShell(client);
+      const command =
+        shell === 'posix' ? posixListCommand(target) : windowsListCommand(target);
+      if (!command.ok) return { ok: false, error: command.error };
+
+      const exec = await runProcess('ssh', [...sshArgs(client), command.value], { timeoutMs: 20_000 });
+      if (exec.code !== 0) {
+        return { ok: false, error: lastMeaningfulLine(exec.output) || `ssh exited ${exec.code}` };
+      }
+
+      const lines = exec.output.split(/\r?\n/).map((l) => l.replace(/\r$/, '')).filter((l) => l.length > 0);
+      const rawPath = lines.shift() ?? target;
+      // Report forward slashes whatever the far side used: that is the form
+      // the config stores and unison's root wants.
+      const resolved = rawPath.replace(/\\/g, '/').replace(/(.)\/$/, '$1');
+      const dirs = (shell === 'posix'
+        ? lines.filter((l) => l.endsWith('/')).map((l) => l.slice(0, -1))
+        : lines
+      )
+        .map((name) => name.trim())
+        .filter((name) => name && !name.startsWith('.'))
+        .sort((a, b) => a.localeCompare(b))
+        .slice(0, 500);
+
+      return { ok: true, path: resolved, parent: parentOf(resolved), dirs };
+    } catch (e) {
+      return { ok: false, error: (e as Error).message };
+    }
+  }
+
+  /** Which shell answers on the far side. Windows OpenSSH defaults to cmd.exe,
+   *  where every POSIX form here is a syntax error. Probed once per host —
+   *  `uname` exists on one and not the other. */
+  private async clientShell(client: SyncClientConfig): Promise<'posix' | 'windows'> {
+    const key = `${client.user ?? ''}@${client.host}:${client.port ?? 22}`;
+    const cached = this.clientShells.get(key);
+    if (cached) return cached;
+    let shell: 'posix' | 'windows' = 'posix';
+    try {
+      const exec = await runProcess('ssh', [...sshArgs(client), 'uname -s'], { timeoutMs: 20_000 });
+      if (exec.code !== 0 || !/linux|darwin|bsd|cygwin|mingw/i.test(exec.output)) shell = 'windows';
+    } catch {
+      /* leave it POSIX; the listing itself will report the real failure */
+    }
+    this.clientShells.set(key, shell);
+    return shell;
   }
 
   /** Shared preflight for the run paths: config, resolution, unison, root. */
@@ -837,6 +902,47 @@ export function safeRelativePath(
   }
   if (value.includes('\0')) return { ok: false, error: 'path contains a null byte' };
   return { ok: true, value };
+}
+
+function sshArgs(client: SyncClientConfig): string[] {
+  return [
+    ...(client.port && client.port !== 22 ? ['-p', String(client.port)] : []),
+    '-o', 'BatchMode=yes',
+    '-o', 'ConnectTimeout=10',
+    client.user ? `${client.user}@${client.host}` : client.host,
+  ];
+}
+
+function posixListCommand(target: string): { ok: true; value: string } | { ok: false; error: string } {
+  // `ls -p` marks directories with a trailing slash; that is the filter.
+  const where = target ? `cd -- ${shellQuote(target)}` : 'cd -- "$HOME"';
+  return { ok: true, value: `${where} && pwd && ls -1Ap -- . 2>/dev/null` };
+}
+
+/** cmd.exe has no quoting scheme that survives arbitrary input, so anything
+ *  it would reinterpret is refused rather than escaped. A path with a quote or
+ *  a percent in it can still be typed by hand. */
+function windowsListCommand(target: string): { ok: true; value: string } | { ok: false; error: string } {
+  const where = target || '%USERPROFILE%';
+  if (target && /["%!^&|<>]/.test(target)) {
+    return { ok: false, error: 'That path has characters this browser cannot pass to cmd — type it instead' };
+  }
+  // `cd` with no argument prints the current directory; `dir /b /ad` lists
+  // directory names only.
+  return { ok: true, value: `cd /d "${where}" && cd && dir /b /ad` };
+}
+
+function parentOf(resolved: string): string | null {
+  if (resolved === '/' || /^[A-Za-z]:\/?$/.test(resolved)) return null;
+  const cut = resolved.replace(/\/[^/]*$/, '');
+  if (!cut) return '/';
+  // C:/Users -> C:/ rather than C:
+  return /^[A-Za-z]:$/.test(cut) ? `${cut}/` : cut;
+}
+
+/** POSIX single-quoting. The client shell is the one that will run this. */
+export function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
 function normaliseClientPath(p: string): string {
